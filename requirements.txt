@@ -1,0 +1,11 @@
+requests
+beautifulsoup4
+ddgs
+trafilatura
+lxml_html_clean
+readability-lxml
+Flask
+kivy>=2.2.0
+kivymd>=1.1.1
+openai>=1.0.0
+python-dotenv
