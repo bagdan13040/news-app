@@ -58,7 +58,7 @@ jobs:
         echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
         
     - name: Upload APK artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: NewsSearch-APK
         path: ${{ steps.get_apk.outputs.apk_path }}
