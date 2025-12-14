@@ -3,8 +3,14 @@ import time
 import threading
 import requests
 from typing import List
-from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
 
 # Попытка загрузить .env (если есть)
 try:
@@ -20,6 +26,15 @@ class FastLLMClient:
     """Легковесный клиент для LLM операций с факт-чекингом."""
 
     def __init__(self):
+        if not OPENAI_AVAILABLE:
+            print("Warning: openai library not available. LLM features disabled.")
+            self.client = None
+            self.models = []
+            self._executor = ThreadPoolExecutor(max_workers=1)
+            self._cache = {}
+            self._cache_ttl = 0
+            return
+            
         base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
         self._base_url = base_url
