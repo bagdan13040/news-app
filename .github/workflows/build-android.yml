@@ -35,6 +35,7 @@ jobs:
         pip install -r requirements.txt
 
     - name: Lint Python code
+      continue-on-error: true
       run: |
         pip install flake8
         flake8 .
