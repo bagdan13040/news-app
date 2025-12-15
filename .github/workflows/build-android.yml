@@ -1,23 +1,41 @@
-name: Build APK
-on: [push, pull_request] # Запуск при каждом пуше в репозиторий
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - uses: actions/checkout@v4 # Копирует ваш код на сервер GitHub
+    - name: Checkout repository
+      uses: actions/checkout@v4 # Обновлено до v4
+      
+    - name: Build with Buildozer
+      uses: ArtemSBulgakov/buildozer-action@v1 # Используем готовый экшен
+      id: buildozer
+      with:
+        command: buildozer android debug
+        buildozer_version: master # Рекомендуется использовать stable или master
+        
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4 # Обновлено до v4
+      with:
+        name: NewsSearch-APK
+        path: ${{ steps.buildozer.outputs.filename }} # Экшен сам передает имя файла
 
-      - name: Build with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        with:
-          command: buildozer android debug
-          buildozer_version: master
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: package
-          path: ${{ steps.buildozer.outputs.filename }} # Автоматически находит созданный APK
-
+    - name: Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ steps.buildozer.outputs.filename }}
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
