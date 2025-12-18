@@ -295,9 +295,10 @@ p4a.python_version = 3.10
 #p4a.setup_py = false
 
 # (str) extra command line arguments to pass when invoking pythonforandroid.toolchain
-# Some Android 15/16 devices use 16KB memory pages; binaries linked with 4KB-only
-# segment alignment may crash at startup. These flags increase page-size alignment.
-p4a.extra_args = --extra-ldflags="-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
+# NOTE: Not all python-for-android versions accept the same CLI flags.
+# If you need custom linker flags (e.g. 16KB page-size compatibility), prefer
+# passing them via environment (LDFLAGS) in CI.
+#p4a.extra_args =
 
 
 #
