@@ -1,6 +1,5 @@
 requests
 beautifulsoup4
-duckduckgo-search==3.9.9
 Flask
 kivy>=2.2.0
 kivymd>=1.1.1

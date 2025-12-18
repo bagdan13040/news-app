@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 import requests
-from duckduckgo_search import DDGS
+import xml.etree.ElementTree as ET
+from urllib.parse import quote_plus
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -107,6 +108,64 @@ def _parse_date(date_str: str):
             return dt
         except Exception:
             return None
+
+
+def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str, str]]:
+    """Fallback news search via Google News RSS (pure-Python).
+
+    Returns items in a DDG-like shape: title/url/date/source/body/image.
+    """
+
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    rss_url = (
+        "https://news.google.com/rss/search?q="
+        + quote_plus(q)
+        + "&hl=ru&gl=RU&ceid=RU:ru"
+    )
+
+    resp = session.get(rss_url, timeout=(5, 20))
+    if not resp.ok:
+        return []
+
+    # Google RSS is XML; ElementTree is sufficient.
+    try:
+        root = ET.fromstring(resp.text)
+    except Exception:
+        return []
+
+    channel = root.find("channel")
+    if channel is None:
+        return []
+
+    out: List[Dict[str, str]] = []
+    for item in channel.findall("item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        pub = (item.findtext("pubDate") or "").strip()
+
+        # Optional: <source> tag contains publisher name.
+        src_tag = item.find("source")
+        source = (src_tag.text or "").strip() if src_tag is not None else "Google News"
+
+        if not link:
+            continue
+        out.append(
+            {
+                "title": title,
+                "url": link,
+                "date": pub,
+                "source": source or "Google News",
+                "body": "",
+                "image": None,
+            }
+        )
+        if len(out) >= max_results:
+            break
+
+    return out
 
 
 def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -> dict:
@@ -236,7 +295,11 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
 
 
 def get_news_with_content(query: str, max_results: int = 6) -> List[Dict]:
-    """Синхронная версия: новости через DuckDuckGo + полный текст параллельно (news_app подход)."""
+    """Синхронная версия: новости + полный текст параллельно.
+
+    NOTE: For Android build reliability we avoid DDG client libraries (ddgs pulls
+    in native lxml). Primary source is Google News RSS.
+    """
     if not query:
         return []
 
@@ -244,17 +307,11 @@ def get_news_with_content(query: str, max_results: int = 6) -> List[Dict]:
     if len(query.split()) < 3 and "новости" not in query.lower():
         search_query = f"{query} новости"
 
+    fetch_candidates = max(max_results, 30)
+
+    # Primary: Google News RSS
     try:
-        fetch_candidates = max(max_results, 20)
-        results = list(
-            DDGS().news(
-                search_query,
-                region="ru-ru",
-                safesearch="off",
-                timedomain="d",
-                max_results=fetch_candidates,
-            )
-        )
+        results = _google_news_rss_search(search_query, max_results=fetch_candidates)
     except Exception:
         return []
 
