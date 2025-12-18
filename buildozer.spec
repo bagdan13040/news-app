@@ -261,8 +261,9 @@ android.allow_backup = True
 #p4a.fork = kivy
 
 # (str) python-for-android branch to use, defaults to master
-# Pin to a stable python-for-android branch for more reproducible CI builds.
-p4a.branch = stable
+# NOTE: Buildozer versions used in CI may require AAB support; the p4a "stable"
+# branch may lag behind and miss the `aab` command.
+p4a.branch = master
 
 # (str) Python version to build with (must be supported by python-for-android).
 # Python 3.11+ may break some C-extension builds; 3.10 is currently the safest choice.

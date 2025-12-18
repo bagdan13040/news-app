@@ -54,7 +54,6 @@ jobs:
       id: buildozer
       with:
         command: buildozer android debug
-        buildozer_version: master
         workdir: .
       env:
         USER: root
