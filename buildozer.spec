@@ -48,6 +48,9 @@ orientation = portrait
 # (bool) Indicate if the application should be fullscreen or not
 fullscreen = 0
 
+# (int) Buildozer log level (0-2). Use 2 in CI to see the real error when builds fail.
+log_level = 2
+
 # (list) Permissions
 # (See https://python-for-android.readthedocs.io/en/latest/buildoptions/#build-options-1 for all the supported syntaxes and properties)
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE
@@ -257,7 +260,8 @@ android.allow_backup = True
 #p4a.fork = kivy
 
 # (str) python-for-android branch to use, defaults to master
-#p4a.branch = master
+# Pin to a stable python-for-android branch for more reproducible CI builds.
+p4a.branch = stable
 
 # (str) Python version to build with (must be supported by python-for-android).
 # Python 3.11+ may break some C-extension builds; 3.10 is currently the safest choice.
