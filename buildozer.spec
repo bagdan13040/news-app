@@ -29,7 +29,8 @@ version = 1.0.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.2.0,kivymd==1.1.1,requests,beautifulsoup4,lxml,openai,python-dotenv,certifi,charset-normalizer,idna,urllib3,duckduckgo-search==3.9.9,trafilatura,lxml_html_clean,readability-lxml,httpx,httpcore,typing-extensions,h11,sniffio,anyio,distro,htmldate,justext
+# Keep this list pure-Python for reliable Android builds.
+requirements = python3,kivy==2.2.0,kivymd==1.1.1,requests,beautifulsoup4,python-dotenv,duckduckgo-search==3.9.9
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes

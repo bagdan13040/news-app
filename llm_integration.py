@@ -26,24 +26,18 @@ class FastLLMClient:
     """Легковесный клиент для LLM операций с факт-чекингом."""
 
     def __init__(self):
-        if not OPENAI_AVAILABLE:
-            print("Warning: openai library not available. LLM features disabled.")
-            self.client = None
-            self.models = []
-            self._executor = ThreadPoolExecutor(max_workers=1)
-            self._cache = {}
-            self._cache_ttl = 0
-            return
-            
         base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
         self._base_url = base_url
         self._is_openrouter = "openrouter.ai" in str(base_url)
+        self._api_key = (api_key or "").strip() or None
         
-        if not api_key:
+        # If the official SDK is installed we'll use it, otherwise fall back to a
+        # minimal HTTP client (OpenAI/OpenRouter-compatible).
+        if not self._api_key:
             print("Warning: LLM API key not found. Fact-checking will be unavailable.")
             self.client = None
-        else:
+        elif OPENAI_AVAILABLE:
             default_headers = None
             if self._is_openrouter:
                 default_headers = {
@@ -51,6 +45,9 @@ class FastLLMClient:
                     "X-Title": os.environ.get("OPENROUTER_APP_TITLE", "News Scout"),
                 }
             self.client = OpenAI(base_url=base_url, api_key=api_key, default_headers=default_headers)
+        else:
+            # SDK not available -> we'll use HTTP mode.
+            self.client = None
 
         models = os.environ.get("LLM_MODELS")
         if models:
@@ -70,19 +67,71 @@ class FastLLMClient:
         api_key = (api_key or "").strip()
         if not api_key:
             self.client = None
+            self._api_key = None
             return
         if base_url:
             self._base_url = base_url.strip()
         self._is_openrouter = "openrouter.ai" in str(self._base_url)
         os.environ["OPENROUTER_API_KEY"] = api_key
+        self._api_key = api_key
         
-        default_headers = None
+        if OPENAI_AVAILABLE:
+            default_headers = None
+            if self._is_openrouter:
+                default_headers = {
+                    "HTTP-Referer": os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost"),
+                    "X-Title": os.environ.get("OPENROUTER_APP_TITLE", "News Scout"),
+                }
+            self.client = OpenAI(base_url=self._base_url, api_key=api_key, default_headers=default_headers)
+        else:
+            self.client = None
+
+
+    def _call_model_http(self, model: str, prompt: str, max_tokens: int, temperature: float) -> str:
+        if not self._api_key:
+            raise RuntimeError("No LLM client configured (missing API key)")
+
+        base = (self._base_url or "").rstrip("/")
+        url = f"{base}/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
         if self._is_openrouter:
-            default_headers = {
-                "HTTP-Referer": os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost"),
-                "X-Title": os.environ.get("OPENROUTER_APP_TITLE", "News Scout"),
-            }
-        self.client = OpenAI(base_url=self._base_url, api_key=api_key, default_headers=default_headers)
+            headers.update(
+                {
+                    "HTTP-Referer": os.environ.get("OPENROUTER_HTTP_REFERER", "http://localhost"),
+                    "X-Title": os.environ.get("OPENROUTER_APP_TITLE", "News Scout"),
+                }
+            )
+
+        payload = {
+            "model": self._normalize_model(model),
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": float(temperature),
+            "max_tokens": int(max_tokens),
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=(5, 30))
+        if not resp.ok:
+            # Try to return a useful error message
+            try:
+                data = resp.json()
+                err = data.get("error") or {}
+                msg = err.get("message") or resp.text
+            except Exception:
+                msg = resp.text
+            raise RuntimeError(f"LLM HTTP error {resp.status_code}: {str(msg)[:300]}")
+
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("LLM HTTP error: empty choices")
+        message = (choices[0].get("message") or {}).get("content")
+        if not message:
+            raise RuntimeError("LLM HTTP error: empty message")
+        return str(message).strip()
 
     def _is_cache_valid(self, key: str) -> bool:
         entry = self._cache.get(key)
@@ -104,16 +153,17 @@ class FastLLMClient:
         return m
 
     def _call_model(self, model: str, prompt: str, max_tokens: int, temperature: float):
-        if not self.client:
-            raise RuntimeError("No LLM client configured (missing API key)")
-        model = self._normalize_model(model)
-        resp = self.client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return resp.choices[0].message.content.strip()
+        if self.client is not None:
+            model = self._normalize_model(model)
+            resp = self.client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content.strip()
+
+        return self._call_model_http(model, prompt, max_tokens=max_tokens, temperature=temperature)
 
     def generate_related_keywords(self, query: str, max_keywords: int = 6, timeout: float = 3.0) -> List[str]:
         """Подбор связанных ключевых слов и синонимов для запроса.

@@ -13,10 +13,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 import requests
-import trafilatura
 from duckduckgo_search import DDGS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+try:
+    from bs4 import BeautifulSoup  # type: ignore[import]
+except Exception:  # pragma: no cover
+    BeautifulSoup = None
 
 
 # Пул потоков для IO-bound задач
@@ -34,6 +38,49 @@ retries = Retry(total=3, connect=3, read=3, backoff_factor=0.5, status_forcelist
 adapter = HTTPAdapter(max_retries=retries, pool_connections=DEFAULT_WORKERS, pool_maxsize=DEFAULT_WORKERS)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
+
+
+def _extract_text_from_html(html: str) -> str | None:
+    """Best-effort HTML -> plain text extraction without native deps.
+
+    This intentionally avoids lxml/trafilatura/readability to keep Android builds
+    reliable (pure-Python stack only).
+    """
+
+    if not html:
+        return None
+
+    if BeautifulSoup is None:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Drop obvious boilerplate/noise
+    for tag in soup.find_all(["script", "style", "noscript", "svg", "canvas"]):
+        try:
+            tag.decompose()
+        except Exception:
+            pass
+    for tag in soup.find_all(["header", "footer", "nav", "aside", "form"]):
+        try:
+            tag.decompose()
+        except Exception:
+            pass
+
+    node = soup.find("article") or soup.find("main") or soup.body or soup
+
+    chunks: list[str] = []
+    for el in node.find_all(["h1", "h2", "h3", "p", "li"], limit=400):
+        t = el.get_text(" ", strip=True)
+        if t and len(t) >= 40:
+            chunks.append(t)
+
+    if chunks:
+        return "\n\n".join(chunks)
+
+    # Fallback: raw text
+    txt = node.get_text("\n", strip=True)
+    return txt or None
 
 
 def _parse_date(date_str: str):
@@ -78,60 +125,8 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
         # Важно: favor полноту, tables иногда содержат основной контент
         html = response.text
 
-        text = trafilatura.extract(
-            response.text,
-            target_language="ru",
-            include_tables=True,
-            include_comments=False,
-            favor_recall=True,
-            favor_precision=False,
-        )
-
-        # Если trafilatura вернула слишком мало (частая проблема на некоторых новостниках),
-        # пробуем дополнительные стратегии.
-        if text is not None and len(text.strip()) < 800:
-            # Попытка через readability-lxml (если установлена)
-            try:
-                from readability import Document  # type: ignore[import]
-
-                doc = Document(html)
-                summary_html = doc.summary()
-                try:
-                    from bs4 import BeautifulSoup  # type: ignore[import]
-
-                    soup = BeautifulSoup(summary_html, "html.parser")
-                    chunks = []
-                    for tag in soup.find_all(["h1", "h2", "h3", "p", "li"]):
-                        t = tag.get_text(" ", strip=True)
-                        if t:
-                            chunks.append(t)
-                    if chunks:
-                        alt_text = "\n\n".join(chunks)
-                        if len(alt_text.strip()) > len(text.strip()):
-                            text = alt_text
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-        if (text is None) or (len(text.strip()) < 800):
-            # Очень простой fallback: попробовать собрать текст из <article> / <p>
-            try:
-                from bs4 import BeautifulSoup  # type: ignore[import]
-
-                soup = BeautifulSoup(html, "html.parser")
-                node = soup.find("article") or soup.find("main") or soup
-                chunks = []
-                for p in node.find_all(["p", "h2", "h3", "li"], limit=200):
-                    t = p.get_text(" ", strip=True)
-                    if t and len(t) > 30:
-                        chunks.append(t)
-                if chunks:
-                    alt_text = "\n\n".join(chunks)
-                    if (text is None) or (len(alt_text.strip()) > len(text.strip())):
-                        text = alt_text
-            except Exception:
-                pass
+        # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
+        text = _extract_text_from_html(html)
         # Если это агрегатор/пересказ и текста мало — попробуем перейти на canonical/первоисточник (1 шаг)
         if (
             _depth < 1
@@ -156,14 +151,13 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
                     source_url = m.group(1)
                 else:
                     # Пытаемся найти ссылку "Источник"/"Первоисточник" через bs4
-                    from bs4 import BeautifulSoup  # type: ignore[import]
-
-                    soup = BeautifulSoup(html, "html.parser")
-                    for a in soup.find_all("a", href=True):
-                        label = a.get_text(" ", strip=True).lower()
-                        if any(k in label for k in ("источник", "первоисточник", "original", "source")):
-                            source_url = a["href"]
-                            break
+                    if BeautifulSoup is not None:
+                        soup = BeautifulSoup(html, "html.parser")
+                        for a in soup.find_all("a", href=True):
+                            label = a.get_text(" ", strip=True).lower()
+                            if any(k in label for k in ("источник", "первоисточник", "original", "source")):
+                                source_url = a["href"]
+                                break
 
                 if source_url and source_url != url:
                     # Некоторые сайты дают относительные URL
@@ -215,10 +209,6 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
                 pass
 
             if not image_url:
-                try:
-                    from bs4 import BeautifulSoup  # type: ignore[import]
-                except Exception:
-                    BeautifulSoup = None
                 if BeautifulSoup is not None:
                     try:
                         soup = BeautifulSoup(response.text, "html.parser")
