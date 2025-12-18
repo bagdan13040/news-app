@@ -794,8 +794,8 @@ class NewsSearchApp(MDApp):
         try:
             from news_search_core import fetch_article_text  # lazy import
 
-            text_data = fetch_article_text(link)
-            text = text_data.get("full_text", "")
+            # fetch_article_text returns plain text (str)
+            text = fetch_article_text(link) or ""
         except Exception as exc:
             err_msg = str(exc)
             Clock.schedule_once(lambda *_: toast(f"Ошибка: {err_msg}"), 0)
