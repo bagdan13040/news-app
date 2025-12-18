@@ -686,6 +686,7 @@ class ArticleScreen(Screen):
                 Clock.schedule_once(show_result, 0)
             except Exception as e:
                 err_msg = str(e)[:100]
+
                 def show_error(*args):
                     loading_dialog.dismiss()
                     toast(f"Ошибка: {err_msg}")

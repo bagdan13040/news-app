@@ -133,9 +133,11 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
             except Exception:
                 pass
         # Если это агрегатор/пересказ и текста мало — попробуем перейти на canonical/первоисточник (1 шаг)
-        if (_depth < 1 and
-                (text is None or len((text or "").strip()) < 800) and
-                "<html" in html.lower()):
+        if (
+            _depth < 1
+            and (text is None or len((text or "").strip()) < 800)
+            and "<html" in html.lower()
+        ):
             try:
                 source_url = None
                 # Быстрый regex для canonical/og:url
