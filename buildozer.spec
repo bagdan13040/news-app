@@ -223,7 +223,8 @@ android.logcat_filters = *:S python:D
 
 # (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
 # In past, was `android.arch` as we weren't supporting builds for multiple archs at the same time.
-android.archs = arm64-v8a, armeabi-v7a
+# NOTE: arm64-only drastically improves build reliability for C-extensions (e.g. lxml).
+android.archs = arm64-v8a
 
 # (bool) enables Android auto backup feature (Android API >=23)
 android.allow_backup = True
@@ -257,6 +258,10 @@ android.allow_backup = True
 
 # (str) python-for-android branch to use, defaults to master
 #p4a.branch = master
+
+# (str) Python version to build with (must be supported by python-for-android).
+# Python 3.11+ may break some C-extension builds; 3.10 is currently the safest choice.
+p4a.python_version = 3.10
 
 # (str) python-for-android specific commit to use, defaults to HEAD, must be within p4a.branch
 #p4a.commit = HEAD
