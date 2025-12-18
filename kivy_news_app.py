@@ -9,6 +9,8 @@ from typing import List, Dict
 
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.metrics import dp
+from kivy.utils import platform
 from kivy.graphics import Line, Color, RoundedRectangle
 from kivy.uix.image import AsyncImage
 from kivy.uix.anchorlayout import AnchorLayout
@@ -113,15 +115,16 @@ class SearchScreen(Screen):
         layout.padding = (12, 12, 12, 12)
 
         # Center the search row horizontally using an AnchorLayout
-        search_row = MDBoxLayout(size_hint=(None, None), height="56dp", width="360dp", spacing="10dp")
+        # Avoid fixed widths on mobile: make the row expand to available width.
+        search_row = MDBoxLayout(size_hint=(1, None), height=dp(56), spacing=dp(10))
         self.query_field = MDTextField(hint_text="Что искать?", mode="rectangle")
         # Let the text field take remaining space and use a compact icon button for search
         self.query_field.size_hint_x = 1
-        search_button = MDIconButton(icon="magnify", icon_size="24sp", size_hint=(None, 1), width="56dp")
+        search_button = MDIconButton(icon="magnify", icon_size="24sp", size_hint=(None, 1), width=dp(56))
         search_button.bind(on_release=self.on_search)
         search_row.add_widget(self.query_field)
         search_row.add_widget(search_button)
-        search_anchor = AnchorLayout(size_hint_y=None, height="56dp")
+        search_anchor = AnchorLayout(size_hint_y=None, height=dp(56), padding=(dp(0), dp(0), dp(0), dp(0)))
         search_anchor.add_widget(search_row)
 
         self.status_label = MDLabel(
@@ -698,7 +701,12 @@ class ArticleScreen(Screen):
 
 class NewsSearchApp(MDApp):
     def build(self) -> ScreenManager:
-        Window.size = (375, 667)
+        # IMPORTANT:
+        # Do not force Window.size on Android/iOS.
+        # On mobile it can lead to letterboxing / strange scaling where the UI
+        # occupies only a small portion of the screen.
+        if platform not in ("android", "ios"):
+            Window.size = (375, 667)
         self.theme_cls.primary_palette = "BlueGray"
 
         # Navigation layout: toolbar + drawer + screens
@@ -739,18 +747,29 @@ class NewsSearchApp(MDApp):
         wrapper_layout.add_widget(toolbar)
         wrapper_layout.add_widget(self.screen_manager)
 
-        # Bottom navigation with centered icon buttons (replace text buttons)
-        bottom_icons = MDBoxLayout(size_hint=(None, None), height="48dp", width="120dp", spacing=24)
+        # Bottom navigation: full-width bar, icons centered.
+        bottom_bar = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(64),
+            padding=(dp(16), 0, dp(16), dp(8)),
+        )
+        bottom_anchor = AnchorLayout(anchor_x="center", anchor_y="center")
+        bottom_icons = MDBoxLayout(
+            orientation="horizontal",
+            size_hint=(None, None),
+            height=dp(48),
+            spacing=dp(28),
+        )
         bottom_home = MDIconButton(icon="home", icon_size="28sp")
         bottom_home.bind(on_release=lambda *_: self._go_to("home"))
         bottom_search = MDIconButton(icon="magnify", icon_size="28sp")
         bottom_search.bind(on_release=lambda *_: self._go_to("search"))
         bottom_icons.add_widget(bottom_home)
         bottom_icons.add_widget(bottom_search)
-        bottom_anchor = AnchorLayout(size_hint_y=None, height="64dp")
         bottom_anchor.add_widget(bottom_icons)
-
-        wrapper_layout.add_widget(bottom_anchor)
+        bottom_bar.add_widget(bottom_anchor)
+        wrapper_layout.add_widget(bottom_bar)
 
         content_screen.add_widget(wrapper_layout)
 
