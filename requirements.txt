@@ -1,6 +1,6 @@
 requests
 beautifulsoup4
-ddgs
+duckduckgo-search==3.9.9
 trafilatura
 lxml_html_clean
 readability-lxml

@@ -14,7 +14,7 @@ from typing import Dict, List
 
 import requests
 import trafilatura
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
