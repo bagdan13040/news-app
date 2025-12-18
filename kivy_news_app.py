@@ -685,101 +685,10 @@ class ArticleScreen(Screen):
                 
                 Clock.schedule_once(show_result, 0)
             except Exception as e:
+                err_msg = str(e)[:100]
                 def show_error(*args):
                     loading_dialog.dismiss()
-                    toast(f"Ошибка: {str(e)[:100]}")
-                Clock.schedule_once(show_error, 0)
-        
-        # Запускаем в отдельном потоке
-        threading.Thread(target=do_fact_check, daemon=True).start()
-
-    def show_fact_check(self, *args):
-        """Показать результат проверки фактов."""
-        if not self.current_article:
-            toast("Нет статьи для проверки")
-            return
-        
-        # Показываем диалог загрузки
-        loading_dialog = MDDialog(
-            title="Проверка фактов",
-            text="Анализирую статью...\n\nЭто может занять несколько секунд.",
-            size_hint=(0.8, None),
-            height="180dp",
-        )
-        loading_dialog.open()
-        
-        def do_fact_check(*args):
-            try:
-                title = self.current_article.get("title", "")
-                text = self.current_article.get("full_text", "")
-                result = llm_client.fact_check(text, title, timeout=15.0)
-                
-                def show_result(*args):
-                    loading_dialog.dismiss()
-                    result_dialog = MDDialog(
-                        title="Результат проверки фактов",
-                        text=result,
-                        size_hint=(0.9, None),
-                        buttons=[
-                            MDFlatButton(
-                                text="Закрыть",
-                                on_release=lambda x: result_dialog.dismiss()
-                            )
-                        ],
-                    )
-                    result_dialog.open()
-                
-                Clock.schedule_once(show_result, 0)
-            except Exception as e:
-                def show_error(*args):
-                    loading_dialog.dismiss()
-                    toast(f"Ошибка: {str(e)[:100]}")
-                Clock.schedule_once(show_error, 0)
-        
-        # Запускаем в отдельном потоке
-        threading.Thread(target=do_fact_check, daemon=True).start()
-
-    def show_fact_check(self, *args):
-        """Показать результат проверки фактов."""
-        if not self.current_article:
-            toast("Нет статьи для проверки")
-            return
-        
-        # Показываем диалог загрузки
-        loading_dialog = MDDialog(
-            title="Проверка фактов",
-            text="Анализирую статью...\n\nЭто может занять несколько секунд.",
-            size_hint=(0.8, None),
-            height="180dp",
-        )
-        loading_dialog.open()
-        
-        def do_fact_check(*args):
-            try:
-                title = self.current_article.get("title", "")
-                text = self.current_article.get("full_text", "")
-                result = llm_client.fact_check(text, title, timeout=15.0)
-                
-                def show_result(*args):
-                    loading_dialog.dismiss()
-                    result_dialog = MDDialog(
-                        title="Результат проверки фактов",
-                        text=result,
-                        size_hint=(0.9, None),
-                        buttons=[
-                            MDFlatButton(
-                                text="Закрыть",
-                                on_release=lambda x: result_dialog.dismiss()
-                            )
-                        ],
-                    )
-                    result_dialog.open()
-                
-                Clock.schedule_once(show_result, 0)
-            except Exception as e:
-                def show_error(*args):
-                    loading_dialog.dismiss()
-                    toast(f"Ошибка: {str(e)[:100]}")
+                    toast(f"Ошибка: {err_msg}")
                 Clock.schedule_once(show_error, 0)
         
         # Запускаем в отдельном потоке
@@ -887,7 +796,8 @@ class NewsSearchApp(MDApp):
             text_data = fetch_article_text(link)
             text = text_data.get("full_text", "")
         except Exception as exc:
-            Clock.schedule_once(lambda *_: toast(f"Ошибка: {exc}"), 0)
+            err_msg = str(exc)
+            Clock.schedule_once(lambda *_: toast(f"Ошибка: {err_msg}"), 0)
             return
 
         payload = self.search_screen.article_payloads.get(link, {})
