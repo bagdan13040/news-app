@@ -13,10 +13,10 @@ package.domain = org.newssearch
 source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,json
 
 # (list) List of inclusions using pattern matching
-#source.include_patterns = assets/*,images/*.png
+source.include_patterns = .env
 
 # (list) Source files to exclude (let empty to not exclude anything)
 #source.exclude_exts = spec
@@ -29,7 +29,7 @@ version = 1.0.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.1.0,kivymd==1.1.1,requests
+requirements = python3,kivy==2.2.0,kivymd==1.1.1,requests,beautifulsoup4,lxml,openai,python-dotenv,certifi,charset-normalizer,idna,urllib3,duckduckgo-search,trafilatura,lxml_html_clean
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
