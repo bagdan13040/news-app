@@ -50,7 +50,7 @@ jobs:
         if [ ! -z "$OPENROUTER_API_KEY" ]; then echo "OPENROUTER_API_KEY=$OPENROUTER_API_KEY" >> .env; fi
 
     - name: Build with Buildozer
-      uses: ArtemSBulgakov/buildozer-action@v1
+      uses: AndreMiras/buildozer-action@v1.3.1
       id: buildozer
       with:
         command: buildozer android debug
