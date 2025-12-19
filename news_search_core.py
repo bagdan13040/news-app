@@ -913,11 +913,12 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
         return {"full_text": f"Ошибка при загрузке статьи: {type(e).__name__}: {str(e)}", "image": None}
 
 
-def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "yandex") -> List[Dict]:
+def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "bing") -> List[Dict]:
     """Синхронная версия: новости + полный текст параллельно.
 
     NOTE: For Android build reliability we avoid DDG client libraries (ddgs pulls
-    in native lxml). Primary sources: Yandex News or Google News RSS.
+    in native lxml). Primary sources: Bing News RSS (primary) with Google/Yandex
+    fallbacks for resilience.
     
     Args:
         query: Поисковый запрос
