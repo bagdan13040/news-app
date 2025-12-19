@@ -1,6 +1,6 @@
-"""Поиск новостей (DuckDuckGo / ddgs) с загрузкой полного текста — портировано из news_app.
+"""Поиск новостей через DuckDuckGo с загрузкой полного текста.
 
-Ключевая цель: отдавать максимально полный текст (без обрезания) + картинку (preview/article).
+Ключевая цель: отдавать максимально полный текст + картинку.
 """
 
 from __future__ import annotations
@@ -13,11 +13,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 import requests
-import xml.etree.ElementTree as ET
-from urllib.parse import quote_plus
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import urljoin, urlparse
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+try:
+    from ddgs import DDGS
+    DDGS_AVAILABLE = True
+except ImportError:
+    DDGS_AVAILABLE = False
+    DDGS = None
 
 try:
     from bs4 import BeautifulSoup  # type: ignore[import]
@@ -46,11 +51,8 @@ session.mount("https://", adapter)
 
 def _extract_text_from_html(html: str) -> str | None:
     """Best-effort HTML -> plain text extraction without native deps.
-
-    This intentionally avoids lxml/trafilatura/readability to keep Android builds
-    reliable (pure-Python stack only).
     
-    Improved algorithm to extract MORE content (full articles, not just snippets).
+    Improved algorithm to extract FULL content (complete articles).
     """
 
     if not html:
@@ -104,13 +106,13 @@ def _extract_text_from_html(html: str) -> str | None:
     if not node:
         node = soup.body or soup
 
-    # Extract ALL text content from relevant tags (not just long ones)
+    # Extract ALL text content from relevant tags
     chunks: list[str] = []
     
     # Get headers and paragraphs in order - keep structure
     for el in node.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote", "pre", "code"]):
         t = el.get_text(" ", strip=True)
-        # Lower minimum length to capture more content (was 40, now 10)
+        # Lower minimum length to capture more content
         if t and len(t) >= 10:
             chunks.append(t)
     
@@ -159,173 +161,68 @@ def _parse_date(date_str: str):
             return None
 
 
-def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str, str]]:
-    """Fallback news search via Google News RSS (pure-Python).
-
-    Returns items in a DDG-like shape: title/url/date/source/body/image.
+def _search_news_ddg(query: str, max_results: int = 20) -> List[Dict[str, str]]:
+    """Search news via DuckDuckGo.
+    
+    Returns items with: title, url, date, source, body, image.
     """
-
+    if not DDGS_AVAILABLE:
+        print("DuckDuckGo library not available, returning empty results")
+        return []
+    
     q = (query or "").strip()
     if not q:
         return []
-
-    rss_url = (
-        "https://news.google.com/rss/search?q="
-        + quote_plus(q)
-        + "&hl=ru&gl=RU&ceid=RU:ru"
-    )
-
-    resp = session.get(rss_url, timeout=(5, 20))
-    if not resp.ok:
-        return []
-
-    # Google RSS is XML; ElementTree is sufficient.
+    
+    # Add "новости" to short queries for better relevance
+    search_query = q
+    if len(q.split()) < 3 and "новости" not in q.lower():
+        search_query = f"{q} новости"
+    
     try:
-        root = ET.fromstring(resp.text)
-    except Exception:
+        results = list(DDGS().news(
+            search_query,
+            region="ru-ru",
+            safesearch="off",
+            timedomain="d",
+            max_results=max_results,
+        ))
+    except Exception as e:
+        print(f"DDG search error: {e}")
         return []
-
-    channel = root.find("channel")
-    if channel is None:
-        return []
-
+    
     out: List[Dict[str, str]] = []
-    for item in channel.findall("item"):
-        title = (item.findtext("title") or "").strip()
-        link = (item.findtext("link") or "").strip()
-        pub = (item.findtext("pubDate") or "").strip()
-        desc = (item.findtext("description") or "").strip()
-
-        # Optional: <source> tag contains publisher name.
-        src_tag = item.find("source")
-        source = (src_tag.text or "").strip() if src_tag is not None else "Google News"
-
-        if not link:
-            continue
-        body = ""
-        image = None
-        # Google News RSS often embeds snippet + preview image in <description> as HTML.
-        if desc:
-            if BeautifulSoup is not None:
-                try:
-                    soup = BeautifulSoup(desc, "html.parser")
-                    img = soup.find("img")
-                    if img and img.get("src"):
-                        image = img.get("src")
-                    body = soup.get_text(" ", strip=True) or ""
-                except Exception:
-                    body = re.sub(r"<[^>]+>", " ", desc)
-            else:
-                body = re.sub(r"<[^>]+>", " ", desc)
-
-        # Normalize whitespace
-        body = re.sub(r"\s+", " ", body).strip()
-
-        out.append(
-            {
-                "title": title,
-                "url": link,
-                "date": pub,
-                "source": source or "Google News",
-                "body": body,
-                "image": image,
-            }
-        )
-        if len(out) >= max_results:
-            break
-
+    for item in results:
+        out.append({
+            "title": item.get("title", "").strip(),
+            "url": item.get("url", "").strip(),
+            "date": item.get("date", "").strip(),
+            "source": item.get("source", "").strip(),
+            "body": item.get("body", "").strip(),
+            "image": item.get("image"),
+        })
+    
     return out
 
 
-def _extract_google_news_source_url(html: str, base_url: str) -> str | None:
-    """Best-effort extraction of publisher URL from a Google News landing page."""
-    if not html:
-        return None
-
-    # Prefer canonical/og:url first (often points to publisher)
-    try:
-        m = re.search(
-            r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
-            html,
-            flags=re.IGNORECASE,
-        )
-        if not m:
-            m = re.search(
-                r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)["\']',
-                html,
-                flags=re.IGNORECASE,
-            )
-        if m:
-            u = m.group(1)
-            u = urljoin(base_url, u)
-            if u:
-                return u
-    except Exception:
-        pass
-
-    # Google often includes a redirect like ...?url=https%3A%2F%2Fpublisher...
-    try:
-        for m in re.finditer(r"[?&]url=([^&\"'>]+)", html, flags=re.IGNORECASE):
-            raw = m.group(1)
-            cand = unquote(raw)
-            if cand.startswith("http"):
-                host = urlparse(cand).netloc.lower()
-                if host and "google." not in host:
-                    return cand
-    except Exception:
-        pass
-
-    # BS4 fallback: pick first non-google https link in anchors
-    if BeautifulSoup is not None:
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            for a in soup.find_all("a", href=True):
-                href = a.get("href")
-                if not href:
-                    continue
-                href = urljoin(base_url, href)
-                if not href.startswith("http"):
-                    continue
-                host = urlparse(href).netloc.lower()
-                if host and "google." not in host:
-                    return href
-        except Exception:
-            pass
-
-    return None
-
-
 def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -> dict:
-    """Скачивает и извлекает полный текст новости по ссылке + картинку (news_app логика)."""
+    """Скачивает и извлекает полный текст новости по ссылке + картинку."""
     try:
         # Use shared session (connection pooling) and a split timeout (connect, read)
-        response = session.get(url, timeout=(5, 20))
-        # Не затираем корректную кодировку из заголовков; но если requests поставил latin-1,
-        # пробуем определить реальную.
+        response = session.get(url, timeout=(5, 20), allow_redirects=True)
+        # Не затираем корректную кодировку из заголовков
         if (not response.encoding) or (response.encoding.lower() in {"iso-8859-1", "latin-1"}):
             response.encoding = response.apparent_encoding or "utf-8"
 
         if not response.ok:
             return {"full_text": f"Ошибка загрузки: {response.status_code}", "image": None}
 
-        # Важно: favor полноту, tables иногда содержат основной контент
         html = response.text
 
-        # If we landed on a Google News page, try to jump to the publisher once.
-        try:
-            if _depth < 1 and ("news.google.com" in (response.url or "") or "news.google.com" in (url or "")):
-                src = _extract_google_news_source_url(html, response.url or url)
-                if src and src != url:
-                    alt = _fetch_article_text(src, existing_image=existing_image, _depth=_depth + 1)
-                    alt_text = (alt.get("full_text") or "").strip()
-                    if len(alt_text) > 200:
-                        return alt
-        except Exception:
-            pass
-
-        # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
+        # Pure-Python extraction
         text = _extract_text_from_html(html)
-        # Если это агрегатор/пересказ и текста мало — попробуем перейти на canonical/первоисточник (1 шаг)
+        
+        # Если текста мало и это агрегатор — попробуем перейти на canonical/первоисточник
         if (
             _depth < 1
             and (text is None or len((text or "").strip()) < 800)
@@ -358,7 +255,6 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
                                 break
 
                 if source_url and source_url != url:
-                    # Некоторые сайты дают относительные URL
                     try:
                         source_url = urljoin(url, source_url)
                     except Exception:
@@ -383,7 +279,6 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
             image_url = existing_image
         else:
             try:
-                html = response.text
                 m = re.search(
                     r"<meta[^>]+property=[\"\']og:image[\"\'][^>]+content=[\"\']([^\"\']+)[\"\']",
                     html,
@@ -404,25 +299,24 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
             except Exception:
                 pass
 
-            if not image_url:
-                if BeautifulSoup is not None:
-                    try:
-                        soup = BeautifulSoup(response.text, "html.parser")
-                        og = soup.find("meta", property="og:image")
-                        if og and og.get("content"):
-                            image_url = og.get("content")
-                        if not image_url:
-                            tw = soup.find("meta", attrs={"name": "twitter:image"})
-                            if tw and tw.get("content"):
-                                image_url = tw.get("content")
-                        if not image_url:
-                            first_img = soup.find("img")
-                            if first_img and first_img.get("src"):
-                                image_url = first_img.get("src")
-                        if image_url:
-                            image_url = urljoin(response.url, image_url)
-                    except Exception:
-                        pass
+            if not image_url and BeautifulSoup is not None:
+                try:
+                    soup = BeautifulSoup(response.text, "html.parser")
+                    og = soup.find("meta", property="og:image")
+                    if og and og.get("content"):
+                        image_url = og.get("content")
+                    if not image_url:
+                        tw = soup.find("meta", attrs={"name": "twitter:image"})
+                        if tw and tw.get("content"):
+                            image_url = tw.get("content")
+                    if not image_url:
+                        first_img = soup.find("img")
+                        if first_img and first_img.get("src"):
+                            image_url = first_img.get("src")
+                    if image_url:
+                        image_url = urljoin(response.url, image_url)
+                except Exception:
+                    pass
 
         return {"full_text": formatted_text, "image": image_url}
     except Exception as e:
@@ -430,15 +324,12 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
 
 
 def get_news_with_content(query: str, max_results: int = 6) -> List[Dict]:
-    """Новости из RSS.
+    """Новости из DuckDuckGo.
 
     По умолчанию возвращаем быстрые результаты (title/link/snippet/image) без
     скачивания и парсинга полного текста — это ускоряет поиск в разы на телефоне.
 
     Полный текст нужно получать по требованию через fetch_article()/fetch_article_text().
-
-    NOTE: For Android build reliability we avoid DDG client libraries (ddgs pulls
-    in native lxml). Primary source is Google News RSS.
     """
     return get_news(query, max_results=max_results, fetch_full_text=False)
 
@@ -454,9 +345,9 @@ def get_news(query: str, max_results: int = 6, fetch_full_text: bool = False) ->
 
     fetch_candidates = max(max_results, 30)
 
-    # Primary: Google News RSS
+    # Primary: DuckDuckGo
     try:
-        results = _google_news_rss_search(search_query, max_results=fetch_candidates)
+        results = _search_news_ddg(search_query, max_results=fetch_candidates)
     except Exception:
         return []
 
