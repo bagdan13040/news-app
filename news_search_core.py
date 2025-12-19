@@ -774,8 +774,9 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
              return {"full_text": "Статья недоступна (требуется согласие на cookies). Попробуйте другую новость.", "image": None}
 
         # Важно: favor полноту, tables иногда содержат основной контент
-        html = response.text
-        html_size = len(html)
+        full_html = response.text
+        html_size = len(full_html)
+        html = full_html
         
         # Логируем начало HTML для диагностики на Android
         if is_android:
@@ -794,7 +795,7 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
             # BeautifulSoup очень медленно работает с огромными файлами на мобильных устройствах
             if html_size > 500000:  # 500KB
                 print(f"[FETCH] HTML too large ({html_size} bytes), truncating to 500KB for faster parsing")
-                html = html[:500000]
+                html = full_html[:500000]
 
         # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
         print(f"[FETCH] Starting text extraction from {len(html)} bytes...")
@@ -804,20 +805,20 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
         if (
             _depth < 1
             and (text is None or len((text or "").strip()) < 800)
-            and "<html" in html.lower()
+            and "<html" in full_html.lower()
         ):
             try:
                 source_url = None
                 # Быстрый regex для canonical/og:url
                 m = re.search(
                     r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
-                    html,
+                    full_html,
                     flags=re.IGNORECASE,
                 )
                 if not m:
                     m = re.search(
                         r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)["\']',
-                        html,
+                        full_html,
                         flags=re.IGNORECASE,
                     )
                 if m:
@@ -825,7 +826,7 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
                 else:
                     # Пытаемся найти ссылку "Источник"/"Первоисточник" через bs4
                     if BeautifulSoup is not None:
-                        soup = BeautifulSoup(html, "html.parser")
+                        soup = BeautifulSoup(full_html, "html.parser")
                         for a in soup.find_all("a", href=True):
                             label = a.get_text(" ", strip=True).lower()
                             if any(k in label for k in ("источник", "первоисточник", "original", "source")):
