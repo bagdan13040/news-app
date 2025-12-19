@@ -156,19 +156,19 @@ class SearchScreen(Screen):
         try:
             # Получаем основные результаты С КОНТЕНТОМ
             print(f"[SEARCH] Searching for: {query}")
-            results = get_news_with_content(query, max_results=8, fetch_content=True)
+            results = get_news_with_content(query, max_results=15, fetch_content=True)
             print(f"[SEARCH] Found {len(results)} initial results")
             
             # Подбираем синонимы и ищем по ним тоже
             try:
                 print(f"[SYNONYMS] Generating synonyms for: {query}")
-                synonyms = llm_client.generate_related_keywords(query, max_keywords=2, timeout=2.0)
+                synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=2.0)
                 print(f"[SYNONYMS] Got synonyms: {synonyms}")
                 
                 for synonym in synonyms:
                     if synonym.lower() != query.lower():
                         print(f"[SYNONYMS] Searching for synonym: {synonym}")
-                        syn_results = get_news_with_content(synonym, max_results=2, fetch_content=True)
+                        syn_results = get_news_with_content(synonym, max_results=3, fetch_content=True)
                         print(f"[SYNONYMS] Found {len(syn_results)} results for '{synonym}'")
                         results.extend(syn_results)
             except Exception as e:
@@ -197,7 +197,7 @@ class SearchScreen(Screen):
                 else:
                     print(f"[FILTER] Skipping article without full text: {r.get('title', 'Unknown')[:50]}")
             
-            results = filtered_results[:8]  # Ограничиваем до 8 результатов с полным текстом
+            results = filtered_results[:12]  # Ограничиваем до 12 результатов с полным текстом
             print(f"[SEARCH] Total results with full text: {len(results)}")
             
         except Exception as exc:

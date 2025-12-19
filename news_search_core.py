@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
 
 
 # Пул потоков для IO-bound задач
-DEFAULT_WORKERS = int(os.environ.get("NEWS_FETCH_WORKERS", "12"))
+DEFAULT_WORKERS = int(os.environ.get("NEWS_FETCH_WORKERS", "24"))
 executor = ThreadPoolExecutor(max_workers=DEFAULT_WORKERS)
 
 # Reusable requests Session with connection-pooling and retries
@@ -509,7 +509,7 @@ def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool 
     if len(query.split()) < 3 and "новости" not in query.lower():
         search_query = f"{query} новости"
 
-    fetch_candidates = max(max_results, 30)
+    fetch_candidates = max(max_results * 3, 50)
 
     # Primary: Google News RSS
     try:
@@ -517,9 +517,9 @@ def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool 
     except Exception:
         return []
 
-    # Фильтруем результаты по дате — расширяющееся окно (3, 7, 14 дней)
+    # Фильтруем результаты по дате — расширяющееся окно (7, 14, 30 дней)
     now_utc = datetime.now(timezone.utc)
-    cutoff_options = [3, 7, 14]
+    cutoff_options = [7, 14, 30]
     parsed = [(item, _parse_date(item.get("date"))) for item in results]
 
     filtered_results: List[Dict] = []
