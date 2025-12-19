@@ -152,6 +152,7 @@ def decode_google_news_url(url: str) -> str:
     except Exception:
         pass
 
+    # Если не удалось декодировать, пробуем просто перейти (Google иногда редиректит)
     return url
 
 
@@ -290,31 +291,55 @@ def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str,
 
 
 def _search_ddg_fallback(title: str) -> str | None:
-    """Поиск прямой ссылки через Bing RSS (fallback)."""
+    """Поиск прямой ссылки через Bing RSS и DuckDuckGo HTML (fallback)."""
     if not title:
         return None
     
     clean_title = re.sub(r'[^\w\s\-\.,]', ' ', title).strip()
+    first_words = ' '.join(clean_title.split()[:10])  # Первые 10 слов для поиска
     
-    # Try Bing RSS
+    # Try Bing RSS first
     try:
-        url = f"https://www.bing.com/news/search?q={quote_plus(clean_title)}&format=rss"
-        resp = session.get(url, timeout=10)
+        url = f"https://www.bing.com/news/search?q={quote_plus(first_words)}&format=rss"
+        resp = session.get(url, timeout=8)
         
         if resp.status_code == 200:
             root = ET.fromstring(resp.text)
-            item = root.find(".//item")
-            if item is not None:
+            # Ищем первые 3 результата
+            for item in root.findall(".//item")[:3]:
                 link = item.findtext("link")
                 if link:
                     # Extract url param if present (Bing wraps links)
                     parsed = urlparse(link)
                     qs = parse_qs(parsed.query)
                     if "url" in qs:
-                        return qs["url"][0]
+                        link = qs["url"][0]
+                    # Проверяем что это не сам Google News
+                    if "news.google.com" not in link and "consent.google.com" not in link:
+                        return link
+    except Exception as e:
+        pass
+    
+    # Try DuckDuckGo HTML parsing as second fallback
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={quote_plus(first_words + ' news')}"
+        resp = session.get(url, timeout=8)
+        
+        if resp.status_code == 200 and BeautifulSoup:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            # Ищем ссылки результатов
+            for result in soup.find_all("a", class_="result__a")[:3]:
+                link = result.get("href")
+                if link and link.startswith("http") and "news.google.com" not in link and "consent.google.com" not in link:
+                    # DDG может оборачивать ссылки
+                    if "uddg=" in link:
+                        parsed = urlparse(link)
+                        qs = parse_qs(parsed.query)
+                        if "uddg" in qs:
+                            link = unquote(qs["uddg"][0])
                     return link
     except Exception as e:
-        print(f"Bing RSS search failed: {e}")
+        pass
 
     return None
 
@@ -338,19 +363,25 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
         if not response.ok:
             return {"full_text": f"Ошибка загрузки: {response.status_code}", "image": None}
 
-        # Check if we are stuck on Google Consent page
-        if "consent.google.com" in response.url or ("cookies" in response.text.lower() and "google" in response.text.lower()):
+        # Check if we are stuck on Google Consent page - расширенная проверка
+        is_consent_page = (
+            "consent.google.com" in response.url or 
+            "consent.google" in response.url or
+            ("before you continue" in response.text.lower() and "google" in response.text.lower()) or
+            ("прежде чем продолжить" in response.text.lower() and "google" in response.text.lower()) or
+            ("cookies" in response.text.lower() and "accept" in response.text.lower() and len(response.text) < 50000)
+        )
+        
+        if is_consent_page:
              # Try fallback if title is available
              if title and _depth == 0:
-                 print(f"Google Consent detected for {url}. Trying Bing fallback for '{title}'...")
                  alt_url = _search_ddg_fallback(title)
                  if alt_url:
-                     print(f"Found fallback URL: {alt_url}")
                      # Check if fallback is also a google consent link (unlikely but possible)
-                     if "consent.google.com" not in alt_url:
-                        return _fetch_article_text(alt_url, existing_image, _depth=_depth + 1)
+                     if "consent.google.com" not in alt_url and "news.google.com" not in alt_url:
+                        return _fetch_article_text(alt_url, existing_image, _depth=_depth + 1, title=None)
              
-             return {"full_text": "Не удалось открыть статью (Google Consent). Попробуйте открыть ссылку в браузере.", "image": None}
+             return {"full_text": "Статья недоступна (требуется согласие на cookies). Попробуйте другую новость.", "image": None}
 
         # Важно: favor полноту, tables иногда содержат основной контент
         html = response.text
