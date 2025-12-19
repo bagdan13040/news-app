@@ -15,6 +15,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor
 
+import xml.etree.ElementTree as ET
+from urllib.parse import quote
+
 # Thread pool for parallel fetching
 DEFAULT_WORKERS = int(os.environ.get("NEWS_FETCH_WORKERS", "12"))
 executor = ThreadPoolExecutor(max_workers=DEFAULT_WORKERS)
@@ -22,7 +25,9 @@ executor = ThreadPoolExecutor(max_workers=DEFAULT_WORKERS)
 # Reusable requests Session with connection-pooling and retries
 session = requests.Session()
 session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
 })
 retries = Retry(total=2, backoff_factor=0.3, status_forcelist=(500, 502, 503, 504))
 adapter = HTTPAdapter(max_retries=retries, pool_connections=DEFAULT_WORKERS, pool_maxsize=DEFAULT_WORKERS)
@@ -60,6 +65,47 @@ def _parse_date(date_str: str):
             return dt
         except Exception:
             return None
+
+def search_google_news_rss(query: str, max_results: int = 20) -> List[Dict]:
+    """Search Google News RSS feed."""
+    try:
+        encoded_query = quote(query)
+        url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ru&gl=RU&ceid=RU:ru"
+        response = session.get(url, timeout=10)
+        if not response.ok:
+            return []
+        
+        root = ET.fromstring(response.content)
+        items = []
+        for item in root.findall('.//item'):
+            title = item.find('title').text if item.find('title') is not None else "No title"
+            link = item.find('link').text if item.find('link') is not None else ""
+            pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
+            description = item.find('description').text if item.find('description') is not None else ""
+            source = item.find('source').text if item.find('source') is not None else "Google News"
+            
+            # Clean description (often contains HTML)
+            if description and BeautifulSoup:
+                try:
+                    description = BeautifulSoup(description, 'html.parser').get_text()
+                except:
+                    pass
+
+            items.append({
+                "title": title,
+                "link": link,
+                "published": pub_date,
+                "source": source,
+                "description": description,
+                "image": None, # RSS doesn't usually have images easily
+                "full_text": ""
+            })
+            if len(items) >= max_results:
+                break
+        return items
+    except Exception as e:
+        print(f"Google News RSS error: {e}")
+        return []
 
 def _fetch_article_text(url: str, existing_image: str = None) -> dict:
     """
@@ -155,60 +201,73 @@ def _fetch_article_text(url: str, existing_image: str = None) -> dict:
 def get_news_with_content(query: str, max_results: int = 5) -> List[Dict]:
     """
     Search news and fetch content.
-    Fast mode: returns results immediately, full text is fetched on demand via fetch_article.
+    Combines Google News RSS (primary) and DuckDuckGo (secondary).
     """
     if not query:
         return []
 
     print(f"Searching for: '{query}'...")
     
-    search_query = query
-    if len(query.split()) < 3 and "новости" not in query.lower():
-        search_query = f"{query} новости"
+    all_results = []
+    seen_links = set()
 
+    # 1. Google News RSS (Primary)
     try:
-        # Use ddgs to search
-        results = list(DDGS().news(
-            search_query,
-            region="ru-ru",
-            safesearch="off",
-            timedomain="d",
-            max_results=max(max_results, 20),
-        ))
+        gn_results = search_google_news_rss(query, max_results=max_results)
+        for item in gn_results:
+            if item['link'] not in seen_links:
+                all_results.append(item)
+                seen_links.add(item['link'])
     except Exception as e:
-        print(f"Search error: {e}")
-        return []
+        print(f"Google News search error: {e}")
+
+    # 2. DuckDuckGo (Secondary - if needed)
+    if len(all_results) < max_results:
+        search_query = query
+        if len(query.split()) < 3 and "новости" not in query.lower():
+            search_query = f"{query} новости"
+
+        try:
+            ddg_results = list(DDGS().news(
+                search_query,
+                region="ru-ru",
+                safesearch="off",
+                timedomain="d",
+                max_results=max(max_results, 20),
+            ))
+            
+            for item in ddg_results:
+                link = item.get("url")
+                if link and link not in seen_links:
+                    all_results.append({
+                        "title": item.get("title"),
+                        "link": link,
+                        "published": item.get("date"),
+                        "source": item.get("source"),
+                        "description": item.get("body"),
+                        "image": item.get("image"),
+                        "full_text": ""
+                    })
+                    seen_links.add(link)
+        except Exception as e:
+            print(f"DDG Search error: {e}")
     
     # Filter by date (last 3 days)
     now_utc = datetime.now(timezone.utc)
     cutoff = now_utc - timedelta(days=3)
     filtered_results = []
     
-    for item in results:
-        dt = _parse_date(item.get('date'))
+    for item in all_results:
+        dt = _parse_date(item.get('published'))
         if dt and dt >= cutoff:
             filtered_results.append(item)
             
     # If not enough recent news, take whatever we have
     if len(filtered_results) < max_results:
-        remaining = [x for x in results if x not in filtered_results]
+        remaining = [x for x in all_results if x not in filtered_results]
         filtered_results.extend(remaining)
         
-    filtered_results = filtered_results[:max_results]
-
-    news_list = []
-    for item in filtered_results:
-        news_list.append({
-            "title": item.get("title"),
-            "link": item.get("url"),
-            "published": item.get("date"),
-            "source": item.get("source"),
-            "description": item.get("body"),
-            "image": item.get("image"),
-            "full_text": "" # Loaded on demand
-        })
-        
-    return news_list
+    return filtered_results[:max_results]
 
 def fetch_article(url: str) -> dict:
     """Fetch single article content."""
