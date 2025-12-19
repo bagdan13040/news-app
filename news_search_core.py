@@ -1,4 +1,26 @@
-"""Поиск новостей (DuckDuckGo / ddgs) с загрузкой полного текста — портировано из news_app.
+"""Минимальный заглушечный модуль поиска новостей.
+
+Пока что логика отключена, чтобы ты мог переписать её с нуля.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List
+
+
+def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "bing") -> List[Dict]:
+    print(f"[SEARCH] Placeholder: get_news_with_content('{query}') -> пусто")
+    return []
+
+
+def fetch_article_text(url: str, title: str | None = None) -> str:
+    print(f"[FETCH] Placeholder: fetch_article_text('{url}') -> пусто")
+    return ""
+
+
+def fetch_article_content(url: str, title: str | None = None) -> Dict[str, str]:
+    print(f"[FETCH] Placeholder: fetch_article_content('{url}') -> пусто")
+    return {"full_text": "", "image": ""}"""Поиск новостей (DuckDuckGo / ddgs) с загрузкой полного текста — портировано из news_app.
 
 Ключевая цель: отдавать максимально полный текст (без обрезания) + картинку (preview/article).
 """
