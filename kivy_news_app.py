@@ -645,6 +645,14 @@ class ArticleScreen(Screen):
             halign="left",
             size_hint_y=None,
         )
+        # CRITICAL: Bind texture_size to height for dynamic resizing
+        self.text_label.bind(
+            texture_size=lambda instance, value: setattr(instance, "height", value[1])
+        )
+        # CRITICAL: Bind width to text_size for proper text wrapping
+        self.text_label.bind(
+            width=lambda instance, value: setattr(instance, "text_size", (value, None))
+        )
         self.scroll.add_widget(self.text_label)
 
         layout.add_widget(top_bar)
@@ -653,16 +661,18 @@ class ArticleScreen(Screen):
         self.add_widget(layout)
 
     def set_article_text(self, text: str, image_url: str = "", _: float = 0) -> None:
+        # Format text with proper paragraph breaks
         formatted_text = "\n\n".join(text.split("\n\n"))
+        
+        # CRITICAL: Set text_size BEFORE setting text to ensure proper wrapping
+        self.text_label.text_size = (self.text_label.width, None)
         self.text_label.text = formatted_text
         self.text_label.font_size = "16sp"
         self.text_label.line_height = 1.5
-        self.text_label.bind(
-            texture_size=lambda instance, value: setattr(instance, "height", value[1])
-        )
-        self.text_label.bind(
-            width=lambda instance, value: setattr(instance, "text_size", (value, None))
-        )
+        
+        # Force immediate height recalculation based on texture
+        self.text_label.texture_update()
+        self.text_label.height = self.text_label.texture_size[1]
 
         if image_url:
             self.image.source = image_url
