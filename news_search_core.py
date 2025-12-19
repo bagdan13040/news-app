@@ -637,6 +637,7 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
     
     print(f"[FETCH] Starting fetch for: {url[:80]}")
     print(f"[FETCH] Depth: {_depth}, Title: {title[:50] if title else 'None'}")
+    print(f"[FETCH] Platform: {'Android' if is_android else 'Desktop'}")
     
     # Try to decode Google News URL to avoid consent wall
     real_url = decode_google_news_url(url)
@@ -646,8 +647,36 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
 
     try:
         print(f"[FETCH] Making HTTP request...")
-        # Use shared session (connection pooling) and a split timeout (connect, read)
-        response = session.get(url, timeout=(5, 20))
+        # На Android увеличиваем таймауты и пробуем несколько раз
+        if is_android:
+            timeout = (10, 30)
+            max_attempts = 3
+        else:
+            timeout = (5, 20)
+            max_attempts = 1
+        
+        response = None
+        last_error = None
+        
+        for attempt in range(max_attempts):
+            try:
+                print(f"[FETCH] Attempt {attempt + 1}/{max_attempts}")
+                response = session.get(url, timeout=timeout)
+                print(f"[FETCH] Success! Status: {response.status_code}")
+                break
+            except Exception as e:
+                last_error = e
+                print(f"[FETCH] Attempt {attempt + 1} failed: {type(e).__name__}: {str(e)[:100]}")
+                if attempt < max_attempts - 1:
+                    import time
+                    time.sleep(1)
+        
+        if response is None:
+            error_msg = f"Не удалось загрузить статью после {max_attempts} попыток"
+            if last_error:
+                error_msg += f": {type(last_error).__name__}: {str(last_error)[:100]}"
+            print(f"[FETCH] ERROR: {error_msg}")
+            return {"full_text": error_msg, "image": None}
         print(f"[FETCH] Response: {response.status_code}, length: {len(response.text)} bytes")
         # Не затираем корректную кодировку из заголовков; но если requests поставил latin-1,
         # пробуем определить реальную.
@@ -787,7 +816,11 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
 
         return {"full_text": formatted_text, "image": image_url}
     except Exception as e:
-        return {"full_text": f"Ошибка при загрузке статьи: {e}", "image": None}
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[FETCH] EXCEPTION: {type(e).__name__}: {str(e)}")
+        print(f"[FETCH] Traceback:\n{error_details}")
+        return {"full_text": f"Ошибка при загрузке статьи: {type(e).__name__}: {str(e)}", "image": None}
 
 
 def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "yandex") -> List[Dict]:
