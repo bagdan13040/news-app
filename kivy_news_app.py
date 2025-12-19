@@ -34,6 +34,7 @@ from kivymd.uix.dialog import MDDialog
 from news_search_core import get_news_with_content, fetch_article_text, fetch_article_content
 from backend import get_weather, get_financial_data, get_google_trends
 from llm_integration import llm_client
+from app_version import APP_VERSION
 
 
 class ResultCard(MDCard):
@@ -656,6 +657,16 @@ class HomeScreen(Screen):
         cat_layout.add_widget(grid_container)
         cat_card.add_widget(cat_layout)
         root.add_widget(cat_card)
+
+        version_label = MDLabel(
+            text=f"Версия {APP_VERSION}",
+            theme_text_color="Secondary",
+            halign="center",
+            size_hint_y=None,
+            height="20dp",
+            font_size="12sp",
+        )
+        root.add_widget(version_label)
 
         scroll.add_widget(root)
         self.add_widget(scroll)
