@@ -410,14 +410,20 @@ def _search_ddg_fallback(title: str) -> str | None:
 def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, title: str = None) -> dict:
     """Скачивает и извлекает полный текст новости по ссылке + картинку (news_app логика)."""
     
+    print(f"[FETCH] Starting fetch for: {url[:80]}")
+    print(f"[FETCH] Depth: {_depth}, Title: {title[:50] if title else 'None'}")
+    
     # Try to decode Google News URL to avoid consent wall
     real_url = decode_google_news_url(url)
     if real_url != url:
+        print(f"[FETCH] Decoded URL: {real_url[:80]}")
         url = real_url
 
     try:
+        print(f"[FETCH] Making HTTP request...")
         # Use shared session (connection pooling) and a split timeout (connect, read)
         response = session.get(url, timeout=(5, 20))
+        print(f"[FETCH] Response: {response.status_code}, length: {len(response.text)} bytes")
         # Не затираем корректную кодировку из заголовков; но если requests поставил latin-1,
         # пробуем определить реальную.
         if (not response.encoding) or (response.encoding.lower() in {"iso-8859-1", "latin-1"}):

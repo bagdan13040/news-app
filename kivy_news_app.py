@@ -218,12 +218,12 @@ class SearchScreen(Screen):
                 except Exception as e:
                     print(f"[PERMISSIONS] Could not request permissions: {e}")
             
-            # Получаем основные результаты С КОНТЕНТОМ
+            # Получаем основные результаты БЕЗ КОНТЕНТА (быстрее)
             print(f"[SEARCH] ===== Starting search for: '{query}' =====")
-            Clock.schedule_once(partial(self._set_status, f"Загружаю новости..."), 0)
+            Clock.schedule_once(partial(self._set_status, "Загружаю новости..."), 0)
             
             print(f"[SEARCH] Calling get_news_with_content...")
-            results = get_news_with_content(query, max_results=15, fetch_content=True)
+            results = get_news_with_content(query, max_results=15, fetch_content=False)
             print(f"[SEARCH] get_news_with_content returned {len(results)} results")
             
             if not results:
@@ -260,18 +260,8 @@ class SearchScreen(Screen):
                 elif not link:
                     unique_results.append(r)
             
-            # ФИЛЬТРУЕМ: оставляем только статьи с полным текстом
-            filtered_results = []
-            for r in unique_results:
-                full_text = r.get("full_text", "").strip()
-                # Проверяем что текст есть и это не ошибка
-                if full_text and len(full_text) > 100 and not full_text.startswith("❌") and "Статья недоступна" not in full_text and "требуется согласие" not in full_text and "Ошибка" not in full_text[:20]:
-                    filtered_results.append(r)
-                else:
-                    print(f"[FILTER] Skipping article without full text: {r.get('title', 'Unknown')[:50]}")
-            
-            results = filtered_results[:12]  # Ограничиваем до 12 результатов с полным текстом
-            print(f"[SEARCH] Total results with full text: {len(results)}")
+            results = unique_results[:12]  # Ограничиваем до 12 результатов
+            print(f"[SEARCH] Total unique results: {len(results)}")
             
         except Exception as exc:
             error_type = type(exc).__name__
@@ -300,9 +290,9 @@ class SearchScreen(Screen):
 
     def _populate_results(self, results: List[Dict[str, str]], query: str, _: float) -> None:
         if not results:
-            self.status_label.text = f"По запросу \"{query}\" не найдено статей с доступным текстом. Попробуйте изменить запрос."
+            self.status_label.text = f"По запросу \"{query}\" ничего не найдено. Попробуйте другой запрос."
             return
-        self.status_label.text = f"Найдено {len(results)} статей с полным текстом."
+        self.status_label.text = f"Найдено {len(results)} статей. Нажмите на статью для загрузки полного текста."
         for idx, payload in enumerate(results):
             # Контейнер для каждой карточки
             card_container = MDBoxLayout(
