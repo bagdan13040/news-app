@@ -738,6 +738,7 @@ class ArticleScreen(Screen):
         
         # Кнопка переключения режима просмотра
         self.view_mode_button = MDIconButton(icon="eye-outline", icon_size="24sp")
+        self._update_view_mode_icon()
         self.view_mode_button.bind(on_release=self.toggle_view_mode)
         actions_box.add_widget(self.view_mode_button)
         
@@ -755,10 +756,8 @@ class ArticleScreen(Screen):
 
         # Контейнер для контента (текст или webview)
         self.content_container = MDBoxLayout(orientation="vertical")
-        
-        # Текстовый режим (по умолчанию)
-        self.text_mode_layout = MDBoxLayout(orientation="vertical")
-        
+
+        self.text_container = MDBoxLayout(orientation="vertical", spacing="12dp")
         self.image = AsyncImage(
             source="",
             size_hint_y=None,
@@ -766,9 +765,9 @@ class ArticleScreen(Screen):
             allow_stretch=True,
             keep_ratio=True,
         )
-        self.text_mode_layout.add_widget(self.image)
+        self.text_container.add_widget(self.image)
 
-        self.scroll = MDScrollView()
+        self.scroll = MDScrollView(size_hint_y=1)
         self.text_label = MDLabel(
             text="Загружаю статью...",
             valign="top",
@@ -776,10 +775,11 @@ class ArticleScreen(Screen):
             size_hint_y=None,
         )
         self.scroll.add_widget(self.text_label)
+        self.text_container.add_widget(self.scroll)
+        self.content_container.add_widget(self.text_container)
 
         layout.add_widget(top_bar)
-        layout.add_widget(self.image)
-        layout.add_widget(self.scroll)
+        layout.add_widget(self.content_container)
         self.add_widget(layout)
 
     def set_article_text(self, text: str, image_url: str = "", _: float = 0) -> None:
@@ -802,6 +802,10 @@ class ArticleScreen(Screen):
             self.image.source = ""
             self.image.height = "0dp"
             self.image.opacity = 0
+
+        self.view_mode = "text"
+        self._update_view_mode_icon()
+        self._show_text_view()
 
         # Всегда показываем начало статьи
         def _scroll_to_top(*_args: object) -> None:
@@ -868,6 +872,46 @@ class ArticleScreen(Screen):
         
         # Запускаем в отдельном потоке
         threading.Thread(target=do_fact_check, daemon=True).start()
+
+    def toggle_view_mode(self, *args):
+        """Переключить режим отображения между текстом и WebView."""
+        if self.view_mode == "text":
+            self.view_mode = "webview"
+            self._update_view_mode_icon()
+            self._show_webview()
+        else:
+            self.view_mode = "text"
+            self._update_view_mode_icon()
+            self._show_text_view()
+
+    def _update_view_mode_icon(self) -> None:
+        """Обновить иконку кнопки режима просмотра (action icon)."""
+        # Значок показывает действие, которое будет выполнено при нажатии
+        self.view_mode_button.icon = "web" if self.view_mode == "text" else "text"
+
+    def _show_text_view(self) -> None:
+        """Показать текстовое представление статьи."""
+        self.content_container.clear_widgets()
+        self.content_container.add_widget(self.text_container)
+
+    def _show_webview(self) -> None:
+        """Показать WebView с оригинальной ссылкой статьи."""
+        if not self.current_article:
+            toast("Сначала выберите статью")
+            self.view_mode = "text"
+            self._update_view_mode_icon()
+            return
+        link = self.current_article.get("link", "")
+        if not link:
+            toast("Ссылка недоступна")
+            self.view_mode = "text"
+            self._update_view_mode_icon()
+            return
+        self.content_container.clear_widgets()
+        self.webview_widget = WebViewWidget()
+        self.webview_widget.size_hint = (1, 1)
+        self.content_container.add_widget(self.webview_widget)
+        self.webview_widget.load_url(link)
 
 
 class NewsSearchApp(MDApp):
