@@ -211,19 +211,32 @@ def _extract_text_from_html(html: str) -> str | None:
         except Exception:
             pass
 
-    node = soup.find("article") or soup.find("main") or soup.body or soup
+    # Ищем основной контент в порядке приоритета
+    node = soup.find("article") or soup.find("main") or soup.find("div", class_=lambda x: x and any(k in str(x).lower() for k in ["content", "article", "post", "entry"])) or soup.body or soup
 
     chunks: list[str] = []
-    for el in node.find_all(["h1", "h2", "h3", "p", "li"], limit=400):
+    
+    # Собираем текст из параграфов, заголовков и списков
+    # Снижаем минимальную длину до 20 символов для большей полноты
+    for el in node.find_all(["h1", "h2", "h3", "h4", "p", "li", "div"], limit=800):
         t = el.get_text(" ", strip=True)
-        if t and len(t) >= 40:
+        # Пропускаем слишком короткие фрагменты и повторы
+        if t and len(t) >= 20 and t not in chunks:
+            # Проверяем что это не навигация/меню (обычно много ссылок)
+            links = el.find_all("a")
+            if len(links) > 5 and len(t) < 100:
+                continue
             chunks.append(t)
 
     if chunks:
-        return "\n\n".join(chunks)
+        text = "\n\n".join(chunks)
+        print(f"[EXTRACT] Extracted {len(text)} chars from {len(chunks)} chunks")
+        return text
 
     # Fallback: raw text
     txt = node.get_text("\n", strip=True)
+    if txt:
+        print(f"[EXTRACT] Fallback extraction: {len(txt)} chars")
     return txt or None
 
 
