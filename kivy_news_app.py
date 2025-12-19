@@ -893,56 +893,105 @@ class NewsSearchApp(MDApp):
             toast("Ссылка недоступна.")
             return
         payload = self.search_screen.article_payloads.get(link, {})
-        text = (
-            self.search_screen.article_cache.get(link)
-            or payload.get("full_text")
-            or payload.get("description")
-        )
+        
+        # Проверяем кэш полного текста
+        cached_text = self.search_screen.article_cache.get(link)
+        if cached_text and len(cached_text) > 500:  # Полный текст должен быть достаточно длинным
+            print(f"[ARTICLE] Using cached content for: {link[:60]}")
+            image_url = payload.get("image", "")
+            self.screen_manager.current = "article"
+            self.article_screen.current_article = payload
+            self.article_screen.set_article_text(cached_text, image_url=image_url)
+            return
+        
+        # Получаем description и full_text
+        full_text = payload.get("full_text", "")
+        description = payload.get("description", "")
+        title = payload.get("title", "")
+        
+        # Формируем текст для показа пока грузится полная статья
+        preview_parts = []
+        if title:
+            preview_parts.append(f"📰 {title}\n")
+        if description:
+            preview_parts.append(f"{description}\n")
+        preview_parts.append("\n⏳ Загружаю полный текст статьи...\n\nПожалуйста, подождите несколько секунд.")
+        
+        preview_text = "\n".join(preview_parts)
         image_url = payload.get("image", "")
-
+        
+        # Переходим на экран статьи и показываем превью
         self.screen_manager.current = "article"
-        # Сохраняем статью для факт-чекинга
         self.article_screen.current_article = payload
-        if text:
-            self.search_screen.article_cache[link] = text
-            self.article_screen.set_article_text(text, image_url=image_url)
-        else:
-            self.article_screen.text_label.text = "Загружаю статью..."
-            threading.Thread(target=self._fetch_and_display, args=(link,), daemon=True).start()
+        self.article_screen.set_article_text(preview_text, image_url=image_url)
+        
+        # Запускаем загрузку полного текста в фоне
+        print(f"[ARTICLE] Fetching full content for: {link[:60]}")
+        threading.Thread(target=self._fetch_and_display, args=(link,), daemon=True).start()
 
     def _fetch_and_display(self, link: str) -> None:
         try:
+            print(f"[FETCH] Starting content fetch for: {link[:60]}")
             payload = self.search_screen.article_payloads.get(link, {})
             title = payload.get("title", "")
+            
+            # Вызываем fetch_article_content для получения полного текста
             content = fetch_article_content(link, title=title)
             text = content.get("full_text") or ""
             image = content.get("image")
+            
+            print(f"[FETCH] Got {len(text)} chars, image: {bool(image)}")
+            
+            # Если текст слишком короткий или это сообщение об ошибке, используем description
+            if not text or len(text) < 200 or "Статья недоступна" in text or "требуется согласие" in text.lower():
+                description = payload.get("description", "")
+                error_info = text if text else "Не удалось извлечь текст"
+                
+                if description and len(description) > 50:
+                    text = f"📰 {title}\n\n{description}\n\n" + \
+                           f"━━━━━━━━━━━━━━━━━\n\n" + \
+                           f"⚠️ Полный текст недоступен\n\n" + \
+                           f"Причина: {error_info}\n\n" + \
+                           f"💡 Откройте статью в браузере (кнопка 🌐 вверху) для полного чтения."
+                else:
+                    text = f"❌ {error_info}\n\n💡 Попробуйте:\n• Открыть в браузере (кнопка 🌐)\n• Выбрать другую новость"
+            else:
+                # Успешно получили полный текст
+                print(f"[FETCH] Successfully fetched full article")
+            
         except Exception as exc:
-            err_msg = str(exc)
-            # Устанавливаем текст ошибки в статью, а не только тост
-            error_text = f"❌ Ошибка загрузки:\n\n{err_msg}\n\nПопробуйте другую статью или откройте ссылку в браузере."
-            Clock.schedule_once(lambda *_: self.article_screen.set_article_text(error_text, image_url=None), 0)
-            Clock.schedule_once(lambda *_: toast(f"Ошибка: {err_msg}"), 0)
+            import traceback
+            err_msg = str(exc)[:150]
+            print(f"[FETCH] Error: {err_msg}")
+            traceback.print_exc()
+            
+            # Формируем информативное сообщение об ошибке
+            payload = self.search_screen.article_payloads.get(link, {})
+            description = payload.get("description", "")
+            title = payload.get("title", "Статья")
+            
+            error_text = f"📰 {title}\n\n"
+            if description:
+                error_text += f"{description}\n\n━━━━━━━━━━━━━━━━━\n\n"
+            error_text += f"❌ Не удалось загрузить полный текст\n\n"
+            error_text += f"Ошибка: {err_msg}\n\n💡 Попробуйте:\n• Открыть в браузере (кнопка 🌐 вверху)\n• Выбрать другую новость из списка"
+            
+            Clock.schedule_once(lambda *_: self.article_screen.set_article_text(error_text, image_url=payload.get("image")), 0)
+            Clock.schedule_once(lambda *_: toast("Не удалось загрузить статью"), 0)
             return
 
         payload = self.search_screen.article_payloads.get(link, {})
         
-        # Проверяем, не вернулось ли сообщение об ошибке вместо текста
-        if text and ("Статья недоступна" in text or "требуется согласие" in text or "Ошибка" in text):
-            # Это сообщение об ошибке - добавляем hint
-            text = f"❌ {text}\n\n💡 Попробуйте:\n• Открыть другую новость из списка\n• Поискать по другим ключевым словам"
-        
-        text = text or payload.get("full_text") or payload.get("description") or "Текст не извлечён."
-        
-        # Если картинка пришла новая, используем её, иначе старую
+        # Если картинка пришла новая, используем её
         image_url = image or payload.get("image", "")
         
-        # Обновляем full_text и image в payload
+        # Обновляем payload и кэш
         payload["full_text"] = text
         if image:
             payload["image"] = image
             
         self.search_screen.article_cache[link] = text
+        print(f"[FETCH] Cached and displaying {len(text)} chars")
         Clock.schedule_once(lambda *_: self.article_screen.set_article_text(text, image_url=image_url), 0)
 
     def go_back(self) -> None:
