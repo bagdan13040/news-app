@@ -154,22 +154,21 @@ class SearchScreen(Screen):
 
     def _perform_search(self, query: str) -> None:
         try:
-            # Получаем основные результаты
+            # Получаем основные результаты С КОНТЕНТОМ
             print(f"[SEARCH] Searching for: {query}")
-            # Запрашиваем без контента для скорости
-            results = get_news_with_content(query, max_results=6, fetch_content=False)
+            results = get_news_with_content(query, max_results=8, fetch_content=True)
             print(f"[SEARCH] Found {len(results)} initial results")
             
             # Подбираем синонимы и ищем по ним тоже
             try:
                 print(f"[SYNONYMS] Generating synonyms for: {query}")
-                synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=2.0)
+                synonyms = llm_client.generate_related_keywords(query, max_keywords=2, timeout=2.0)
                 print(f"[SYNONYMS] Got synonyms: {synonyms}")
                 
                 for synonym in synonyms:
                     if synonym.lower() != query.lower():
                         print(f"[SYNONYMS] Searching for synonym: {synonym}")
-                        syn_results = get_news_with_content(synonym, max_results=2, fetch_content=False)
+                        syn_results = get_news_with_content(synonym, max_results=2, fetch_content=True)
                         print(f"[SYNONYMS] Found {len(syn_results)} results for '{synonym}'")
                         results.extend(syn_results)
             except Exception as e:
@@ -187,8 +186,19 @@ class SearchScreen(Screen):
                     unique_results.append(r)
                 elif not link:
                     unique_results.append(r)
-            results = unique_results[:10]  # Ограничиваем до 10 результатов
-            print(f"[SEARCH] Total unique results: {len(results)}")
+            
+            # ФИЛЬТРУЕМ: оставляем только статьи с полным текстом
+            filtered_results = []
+            for r in unique_results:
+                full_text = r.get("full_text", "").strip()
+                # Проверяем что текст есть и это не ошибка
+                if full_text and len(full_text) > 100 and not full_text.startswith("❌") and "Статья недоступна" not in full_text and "требуется согласие" not in full_text and "Ошибка" not in full_text[:20]:
+                    filtered_results.append(r)
+                else:
+                    print(f"[FILTER] Skipping article without full text: {r.get('title', 'Unknown')[:50]}")
+            
+            results = filtered_results[:8]  # Ограничиваем до 8 результатов с полным текстом
+            print(f"[SEARCH] Total results with full text: {len(results)}")
             
         except Exception as exc:
             print(f"[SEARCH] Error: {exc}")
@@ -203,9 +213,9 @@ class SearchScreen(Screen):
 
     def _populate_results(self, results: List[Dict[str, str]], query: str, _: float) -> None:
         if not results:
-            self.status_label.text = f"По запросу \"{query}\" ничего не найдено."
+            self.status_label.text = f"По запросу \"{query}\" не найдено статей с доступным текстом. Попробуйте изменить запрос."
             return
-        self.status_label.text = f"Найдено {len(results)} результата."
+        self.status_label.text = f"Найдено {len(results)} статей с полным текстом."
         for idx, payload in enumerate(results):
             # Контейнер для каждой карточки
             card_container = MDBoxLayout(
@@ -222,7 +232,8 @@ class SearchScreen(Screen):
             link = payload.get("link", "")
             if link:
                 self.article_payloads[link] = payload
-                cached_text = payload.get("full_text") or payload.get("description") or ""
+                # Кэшируем полный текст (он уже загружен)
+                cached_text = payload.get("full_text", "")
                 if cached_text:
                     self.article_cache[link] = cached_text
             
@@ -230,33 +241,6 @@ class SearchScreen(Screen):
             if idx < len(results) - 1:
                 separator = MDBoxLayout(size_hint_y=None, height="6dp")
                 self.results_list.add_widget(separator)
-        threading.Thread(target=self._prefetch_articles, args=(results,), daemon=True).start()
-
-    def _prefetch_articles(self, results: List[Dict[str, str]]) -> None:
-        for payload in results:
-            link = payload.get("link", "")
-            title = payload.get("title", "")
-            if not link:
-                continue
-
-            full_text = payload.get("full_text", "")
-            if full_text:
-                self.article_cache[link] = full_text
-            else:
-                try:
-                    # Дозагружаем контент, если его не было
-                    content = fetch_article_content(link, title=title)
-                    fetched_text = content.get("full_text")
-                    fetched_image = content.get("image")
-
-                    if fetched_text:
-                        self.article_cache[link] = fetched_text
-                        payload["full_text"] = fetched_text
-                    
-                    if fetched_image and not payload.get("image"):
-                        payload["image"] = fetched_image
-                except Exception as e:
-                    print(f"Error prefetching {link}: {e}")
 
 
 class HomeScreen(Screen):
