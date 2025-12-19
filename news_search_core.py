@@ -219,32 +219,78 @@ def _extract_text_from_html(html: str) -> str | None:
             pass
 
     # Ищем основной контент в порядке приоритета
-    node = soup.find("article") or soup.find("main") or soup.find("div", class_=lambda x: x and any(k in str(x).lower() for k in ["content", "article", "post", "entry"])) or soup.body or soup
+    candidates = [
+        soup.find("article"),
+        soup.find("main"),
+        soup.find("div", {"class": lambda x: x and any(k in str(x).lower() for k in ["article", "post", "content", "entry", "story"])}),
+        soup.find("div", {"id": lambda x: x and any(k in str(x).lower() for k in ["article", "post", "content", "entry", "story"])}),
+        soup.body,
+        soup
+    ]
+    
+    node = None
+    for candidate in candidates:
+        if candidate:
+            print(f"[EXTRACT] Using node: {candidate.name if hasattr(candidate, 'name') else 'unknown'}")
+            node = candidate
+            break
+    
+    if not node:
+        print("[EXTRACT] No suitable node found")
+        return None
 
     chunks: list[str] = []
+    seen_texts = set()  # Для более эффективной проверки дубликатов
     
-    # Собираем текст из параграфов, заголовков, списков, секций, времени
-    # Снижаем минимальную длину до 15 символов, убираем limit для полноты
-    for el in node.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "div", "section", "span", "blockquote", "time"]):
+    # Собираем текст из параграфов, заголовков, списков - приоритет основным тегам
+    priority_tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"]
+    secondary_tags = ["li", "div", "section", "article", "td"]
+    
+    print(f"[EXTRACT] Searching for content in {node.name}...")
+    
+    # Сначала ищем в приоритетных тегах
+    for el in node.find_all(priority_tags):
         t = el.get_text(" ", strip=True)
-        # Пропускаем слишком короткие фрагменты и повторы
-        if t and len(t) >= 15 and t not in chunks:
-            # Проверяем что это не навигация/меню (обычно много ссылок)
-            links = el.find_all("a")
-            if len(links) > 5 and len(t) < 100:
-                continue
-            print(f"[EXTRACT] chunk: {len(t)} chars from {el.name}")
-            chunks.append(t)
+        # Минимальная длина 20 символов для основного текста
+        if t and len(t) >= 20:
+            # Проверяем что текст не повторяется
+            if t not in seen_texts:
+                # Проверяем что это не навигация/меню (обычно много ссылок)
+                links = el.find_all("a")
+                if len(links) > 5 and len(t) < 150:
+                    continue
+                print(f"[EXTRACT] Priority chunk: {len(t)} chars from {el.name}")
+                chunks.append(t)
+                seen_texts.add(t)
+    
+    # Если нашли мало текста, ищем в дополнительных тегах
+    if len(chunks) < 3 or sum(len(c) for c in chunks) < 300:
+        print(f"[EXTRACT] Not enough content ({len(chunks)} chunks, {sum(len(c) for c in chunks)} chars), searching secondary tags...")
+        for el in node.find_all(secondary_tags):
+            t = el.get_text(" ", strip=True)
+            if t and len(t) >= 30 and t not in seen_texts:  # Для div/section требуем минимум 30 символов
+                # Пропускаем элементы с множеством дочерних блоков (скорее всего контейнеры)
+                if el.name in ["div", "section"] and len(el.find_all(["div", "section"], recursive=False)) > 3:
+                    continue
+                links = el.find_all("a")
+                if len(links) > 5 and len(t) < 150:
+                    continue
+                print(f"[EXTRACT] Secondary chunk: {len(t)} chars from {el.name}")
+                chunks.append(t)
+                seen_texts.add(t)
 
     if chunks:
         text = "\n\n".join(chunks)
         print(f"[EXTRACT] Extracted {len(text)} chars from {len(chunks)} chunks")
         return text
 
-    # Fallback: raw text
+    # Fallback: raw text из всего node
+    print("[EXTRACT] Using fallback: raw text extraction")
     txt = node.get_text("\n", strip=True)
     if txt:
         print(f"[EXTRACT] Fallback extraction: {len(txt)} chars")
+        # Очищаем от множественных переносов строк
+        txt = re.sub(r'\n{3,}', '\n\n', txt)
     return txt or None
 
 
@@ -729,10 +775,12 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
 
         # Важно: favor полноту, tables иногда содержат основной контент
         html = response.text
+        html_size = len(html)
         
         # Логируем начало HTML для диагностики на Android
         if is_android:
             html_preview = html[:500].replace('\n', ' ')[:500]
+            print(f"[FETCH] HTML size: {html_size} bytes")
             print(f"[FETCH] HTML preview: {html_preview}...")
             
             # Проверяем есть ли основные HTML теги
@@ -741,9 +789,17 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
             has_main = '<main' in html.lower()
             has_paragraphs = '<p>' in html.lower() or '<p ' in html.lower()
             print(f"[FETCH] HTML structure: body={has_body}, article={has_article}, main={has_main}, paragraphs={has_paragraphs}")
+            
+            # На Android ограничиваем размер HTML для ускорения парсинга
+            # BeautifulSoup очень медленно работает с огромными файлами на мобильных устройствах
+            if html_size > 500000:  # 500KB
+                print(f"[FETCH] HTML too large ({html_size} bytes), truncating to 500KB for faster parsing")
+                html = html[:500000]
 
         # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
+        print(f"[FETCH] Starting text extraction from {len(html)} bytes...")
         text = _extract_text_from_html(html)
+        print(f"[FETCH] Extraction completed, got {len(text) if text else 0} chars")
         # Если это агрегатор/пересказ и текста мало — попробуем перейти на canonical/первоисточник (1 шаг)
         if (
             _depth < 1
