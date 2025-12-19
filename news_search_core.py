@@ -32,18 +32,32 @@ executor = ThreadPoolExecutor(max_workers=DEFAULT_WORKERS)
 # Reusable requests Session with connection-pooling and retries
 session = requests.Session()
 
-# На Android используем certifi для SSL сертификатов
+# Определяем платформу
 try:
-    import certifi
-    import ssl
-    # Проверяем есть ли certifi сертификаты
-    if os.path.exists(certifi.where()):
-        session.verify = certifi.where()
-        print(f"[SSL] Using certifi bundle: {certifi.where()}")
-except ImportError:
-    print("[SSL] certifi not available, using system certificates")
-except Exception as e:
-    print(f"[SSL] Error configuring SSL: {e}")
+    from kivy.utils import platform as kivy_platform
+    is_android = kivy_platform == "android"
+except:
+    is_android = False
+
+# На Android временно отключаем проверку SSL для отладки
+if is_android:
+    print("[SSL] Running on Android - disabling SSL verification for debugging")
+    session.verify = False
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+else:
+    # На других платформах используем certifi для SSL сертификатов
+    try:
+        import certifi
+        import ssl
+        # Проверяем есть ли certifi сертификаты
+        if os.path.exists(certifi.where()):
+            session.verify = certifi.where()
+            print(f"[SSL] Using certifi bundle: {certifi.where()}")
+    except ImportError:
+        print("[SSL] certifi not available, using system certificates")
+    except Exception as e:
+        print(f"[SSL] Error configuring SSL: {e}")
 
 session.headers.update(
     {
@@ -247,6 +261,7 @@ def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str,
 
     q = (query or "").strip()
     if not q:
+        print("[RSS] Empty query")
         return []
 
     rss_url = (
@@ -255,15 +270,42 @@ def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str,
         + "&hl=ru&gl=RU&ceid=RU:ru"
     )
 
-    print(f"[RSS] Fetching Google News RSS: {rss_url}")
+    print(f"[RSS] Fetching Google News RSS for '{q}'")
+    print(f"[RSS] URL: {rss_url}")
+    
     try:
+        print(f"[RSS] Making request with timeout (10, 30)...")
         resp = session.get(rss_url, timeout=(10, 30))
         print(f"[RSS] Response status: {resp.status_code}")
+        print(f"[RSS] Response length: {len(resp.text)} bytes")
+        
         if not resp.ok:
-            print(f"[RSS] Bad response: {resp.status_code}")
+            print(f"[RSS] Bad response: {resp.status_code} - {resp.reason}")
             return []
+        
+        if len(resp.text) < 100:
+            print(f"[RSS] Response too short, likely error: {resp.text[:200]}")
+            return []
+            
+    except requests.exceptions.SSLError as e:
+        print(f"[RSS] SSL Error: {e}")
+        print(f"[RSS] Trying without SSL verification...")
+        try:
+            resp = session.get(rss_url, timeout=(10, 30), verify=False)
+            print(f"[RSS] Retry succeeded: {resp.status_code}")
+        except Exception as e2:
+            print(f"[RSS] Retry also failed: {e2}")
+            raise
+    except requests.exceptions.Timeout as e:
+        print(f"[RSS] Timeout: {e}")
+        raise
+    except requests.exceptions.ConnectionError as e:
+        print(f"[RSS] Connection error: {e}")
+        raise  
     except Exception as e:
-        print(f"[RSS] Request failed: {type(e).__name__}: {e}")
+        print(f"[RSS] Unexpected error: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
     # Google RSS is XML; ElementTree is sufficient.

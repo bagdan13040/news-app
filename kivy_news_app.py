@@ -195,37 +195,59 @@ class SearchScreen(Screen):
         threading.Thread(target=self._perform_search, args=(query,), daemon=True).start()
 
     def _perform_search(self, query: str) -> None:
+        # ТЕСТОВЫЙ РЕЖИМ - раскомментируйте для проверки UI
+        # test_results = [{
+        #     "title": "Тестовая новость 1",
+        #     "link": "https://example.com/1",
+        #     "published": "Thu, 19 Dec 2024 12:00:00 GMT",
+        #     "source": "Test Source",
+        #     "description": "Это тестовое описание новости",
+        #     "image": None,
+        #     "full_text": "Это полный текст тестовой новости. Здесь достаточно текста чтобы пройти фильтр минимальной длины. Lorem ipsum dolor sit amet, consectetur adipiscing elit."
+        # }]
+        # Clock.schedule_once(partial(self._populate_results, test_results, query), 0)
+        # return
+        
         try:
             # Проверяем сетевое подключение на Android
             if platform == "android":
                 try:
                     from android.permissions import request_permissions, Permission
                     request_permissions([Permission.INTERNET, Permission.ACCESS_NETWORK_STATE])
+                    print("[PERMISSIONS] Permissions requested")
                 except Exception as e:
                     print(f"[PERMISSIONS] Could not request permissions: {e}")
             
             # Получаем основные результаты С КОНТЕНТОМ
-            print(f"[SEARCH] Searching for: {query}")
-            Clock.schedule_once(partial(self._set_status, f"Ищу новости по запросу: {query}"), 0)
-            results = get_news_with_content(query, max_results=15, fetch_content=True)
-            print(f"[SEARCH] Found {len(results)} initial results")
+            print(f"[SEARCH] ===== Starting search for: '{query}' =====")
+            Clock.schedule_once(partial(self._set_status, f"Загружаю новости..."), 0)
             
-            # Подбираем синонимы и ищем по ним тоже
-            try:
-                print(f"[SYNONYMS] Generating synonyms for: {query}")
-                synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=2.0)
-                print(f"[SYNONYMS] Got synonyms: {synonyms}")
-                
-                for synonym in synonyms:
-                    if synonym.lower() != query.lower():
-                        print(f"[SYNONYMS] Searching for synonym: {synonym}")
-                        syn_results = get_news_with_content(synonym, max_results=3, fetch_content=True)
-                        print(f"[SYNONYMS] Found {len(syn_results)} results for '{synonym}'")
-                        results.extend(syn_results)
-            except Exception as e:
-                print(f"[SYNONYMS] Error: {e}")
-                import traceback
-                traceback.print_exc()
+            print(f"[SEARCH] Calling get_news_with_content...")
+            results = get_news_with_content(query, max_results=15, fetch_content=True)
+            print(f"[SEARCH] get_news_with_content returned {len(results)} results")
+            
+            if not results:
+                print(f"[SEARCH] No results returned, checking for errors...")
+                Clock.schedule_once(partial(self._set_status, f"Не удалось найти новости. Проверьте подключение к интернету."), 0)
+                return
+            
+            # Пока отключаем синонимы для отладки
+            # print(f"[SEARCH] Found {len(results)} initial results")
+            # try:
+            #     print(f"[SYNONYMS] Generating synonyms for: {query}")
+            #     synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=2.0)
+            #     print(f"[SYNONYMS] Got synonyms: {synonyms}")
+            #     
+            #     for synonym in synonyms:
+            #         if synonym.lower() != query.lower():
+            #             print(f"[SYNONYMS] Searching for synonym: {synonym}")
+            #             syn_results = get_news_with_content(synonym, max_results=3, fetch_content=True)
+            #             print(f"[SYNONYMS] Found {len(syn_results)} results for '{synonym}'")
+            #             results.extend(syn_results)
+            # except Exception as e:
+            #     print(f"[SYNONYMS] Error: {e}")
+            #     import traceback
+            #     traceback.print_exc()
             
             # Удаляем дубликаты по ссылке
             seen_links = set()
