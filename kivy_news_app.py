@@ -76,6 +76,48 @@ class ResultCard(MDCard):
         title_label.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
         self.add_widget(title_label)
 
+        # Дата и источник
+        published = payload.get("published", "")
+        source = payload.get("source", "")
+        meta_text = ""
+        if published:
+            # Форматируем дату
+            try:
+                from datetime import datetime
+                import email.utils as email_utils
+                # Пробуем распарсить дату
+                try:
+                    dt = email_utils.parsedate_to_datetime(published)
+                    # Форматируем как "19 дек 2025"
+                    months_ru = {1: "янв", 2: "фев", 3: "мар", 4: "апр", 5: "мая", 6: "июн",
+                                 7: "июл", 8: "авг", 9: "сен", 10: "окт", 11: "ноя", 12: "дек"}
+                    date_str = f"{dt.day} {months_ru.get(dt.month, dt.month)} {dt.year}"
+                    meta_text = date_str
+                except:
+                    # Если не удалось распарсить, показываем как есть
+                    meta_text = published[:16] if len(published) > 16 else published
+            except:
+                pass
+        
+        if source:
+            if meta_text:
+                meta_text = f"{meta_text} · {source}"
+            else:
+                meta_text = source
+        
+        if meta_text:
+            meta_label = MDLabel(
+                text=meta_text,
+                theme_text_color="Custom",
+                text_color=(0.6, 0.6, 0.6, 1),
+                font_size="11sp",
+                size_hint_y=None,
+                height="18dp",
+                halign="left"
+            )
+            meta_label.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+            self.add_widget(meta_label)
+
         snippet_label = MDLabel(
             text=snippet or "Прочитать полную статью",
             theme_text_color="Custom",
@@ -775,14 +817,15 @@ class NewsSearchApp(MDApp):
             orientation="horizontal",
             size_hint_y=None,
             height=dp(64),
-            padding=(dp(16), 0, dp(16), dp(8)),
+            padding=(0, 0, 0, dp(8)),
         )
         bottom_anchor = AnchorLayout(anchor_x="center", anchor_y="center")
         bottom_icons = MDBoxLayout(
             orientation="horizontal",
             size_hint=(None, None),
             height=dp(48),
-            spacing=dp(28),
+            width=dp(120),
+            spacing=dp(32),
         )
         bottom_home = MDIconButton(icon="home", icon_size="28sp")
         bottom_home.bind(on_release=lambda *_: self._go_to("home"))
