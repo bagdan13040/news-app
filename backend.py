@@ -112,7 +112,13 @@ def get_google_trends(ttl: int = 1800) -> List[Dict[str, str]]:
 
     url = "https://news.google.com/rss?hl=ru&gl=RU&ceid=RU:ru"
     try:
-        resp = requests.get(url, timeout=5)
+        # Используем сконфигурированный session из news_search_core
+        from news_search_core import session
+        
+        print(f"[TRENDS] Fetching Google News trends from {url}")
+        resp = session.get(url, timeout=(5, 10))
+        print(f"[TRENDS] Response status: {resp.status_code}")
+        
         if resp.ok:
             root = ET.fromstring(resp.content)
             items = root.findall('.//item')
@@ -129,12 +135,18 @@ def get_google_trends(ttl: int = 1800) -> List[Dict[str, str]]:
                         "change": "Hot"
                     })
             if trends:
+                print(f"[TRENDS] Found {len(trends)} trends")
                 _set_cache(key, trends)
                 return trends
+            else:
+                print("[TRENDS] No trends found in RSS")
     except Exception as e:
-        print(f"Ошибка получения трендов: {e}")
+        print(f"[TRENDS] Ошибка получения трендов: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Fallback
+    print("[TRENDS] Using fallback trends")
     return [
         {"tag": "#AI", "name": "ИИ и Нейросети", "change": "+24%"},
         {"tag": "#Space", "name": "Космос", "change": "+12%"},
