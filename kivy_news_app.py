@@ -157,7 +157,8 @@ class SearchScreen(Screen):
             # Получаем основные результаты
             print(f"[SEARCH] Searching for: {query}")
             # IMPORTANT: keep search fast on mobile; full text is fetched on demand.
-            results = get_news_with_content(query, max_results=6)
+            # Increased limit as requested
+            results = get_news_with_content(query, max_results=20)
             print(f"[SEARCH] Found {len(results)} initial results")
 
             # Show initial results ASAP.

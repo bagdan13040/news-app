@@ -98,9 +98,9 @@ def _fetch_article_text(url: str, existing_image: str = None) -> dict:
                 article_body = soup.find('article') or soup.find('main') or soup.find('div', class_=re.compile('content|article|post')) or soup.body
                 
                 if article_body:
-                    for p in article_body.find_all(['p', 'h2', 'h3']):
+                    for p in article_body.find_all(['p', 'h2', 'h3', 'div']):
                         t = p.get_text(strip=True)
-                        if len(t) > 30: # Filter short junk
+                        if len(t) > 10: # Lower threshold to capture almost everything
                             paragraphs.append(t)
                 
                 if paragraphs:
@@ -109,7 +109,17 @@ def _fetch_article_text(url: str, existing_image: str = None) -> dict:
                 print(f"BeautifulSoup error: {e}")
 
         if not text:
-            formatted_text = "" # Return empty string so UI knows it failed
+            # Last resort: just dump all text from body
+            if BeautifulSoup:
+                try:
+                    text = soup.body.get_text("\n\n", strip=True)
+                except:
+                    pass
+            
+            if not text:
+                formatted_text = "Не удалось извлечь текст."
+            else:
+                formatted_text = text
         else:
             # Clean up text
             paragraphs = text.split('\n')
