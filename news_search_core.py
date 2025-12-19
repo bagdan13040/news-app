@@ -59,9 +59,16 @@ else:
     except Exception as e:
         print(f"[SSL] Error configuring SSL: {e}")
 
+# Используем разные User-Agent для Android и десктопа
+if is_android:
+    user_agent = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    print("[USER-AGENT] Using mobile User-Agent for Android")
+else:
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 session.headers.update(
     {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
     }
@@ -216,16 +223,17 @@ def _extract_text_from_html(html: str) -> str | None:
 
     chunks: list[str] = []
     
-    # Собираем текст из параграфов, заголовков и списков
-    # Снижаем минимальную длину до 20 символов для большей полноты
-    for el in node.find_all(["h1", "h2", "h3", "h4", "p", "li", "div"], limit=800):
+    # Собираем текст из параграфов, заголовков, списков, секций, времени
+    # Снижаем минимальную длину до 15 символов, убираем limit для полноты
+    for el in node.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "div", "section", "span", "blockquote", "time"]):
         t = el.get_text(" ", strip=True)
         # Пропускаем слишком короткие фрагменты и повторы
-        if t and len(t) >= 20 and t not in chunks:
+        if t and len(t) >= 15 and t not in chunks:
             # Проверяем что это не навигация/меню (обычно много ссылок)
             links = el.find_all("a")
             if len(links) > 5 and len(t) < 100:
                 continue
+            print(f"[EXTRACT] chunk: {len(t)} chars from {el.name}")
             chunks.append(t)
 
     if chunks:
@@ -721,6 +729,18 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
 
         # Важно: favor полноту, tables иногда содержат основной контент
         html = response.text
+        
+        # Логируем начало HTML для диагностики на Android
+        if is_android:
+            html_preview = html[:500].replace('\n', ' ')[:500]
+            print(f"[FETCH] HTML preview: {html_preview}...")
+            
+            # Проверяем есть ли основные HTML теги
+            has_body = '<body' in html.lower()
+            has_article = '<article' in html.lower()
+            has_main = '<main' in html.lower()
+            has_paragraphs = '<p>' in html.lower() or '<p ' in html.lower()
+            print(f"[FETCH] HTML structure: body={has_body}, article={has_article}, main={has_main}, paragraphs={has_paragraphs}")
 
         # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
         text = _extract_text_from_html(html)
