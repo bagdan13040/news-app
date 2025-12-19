@@ -1,26 +1,4 @@
-"""Минимальный заглушечный модуль поиска новостей.
-
-Пока что логика отключена, чтобы ты мог переписать её с нуля.
-"""
-
-from __future__ import annotations
-
-from typing import Dict, List
-
-
-def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "bing") -> List[Dict]:
-    print(f"[SEARCH] Placeholder: get_news_with_content('{query}') -> пусто")
-    return []
-
-
-def fetch_article_text(url: str, title: str | None = None) -> str:
-    print(f"[FETCH] Placeholder: fetch_article_text('{url}') -> пусто")
-    return ""
-
-
-def fetch_article_content(url: str, title: str | None = None) -> Dict[str, str]:
-    print(f"[FETCH] Placeholder: fetch_article_content('{url}') -> пусто")
-    return {"full_text": "", "image": ""}"""Поиск новостей (DuckDuckGo / ddgs) с загрузкой полного текста — портировано из news_app.
+"""Поиск новостей (DuckDuckGo / ddgs) с загрузкой полного текста — портировано из news_app.
 
 Ключевая цель: отдавать максимально полный текст (без обрезания) + картинку (preview/article).
 """
@@ -81,16 +59,9 @@ else:
     except Exception as e:
         print(f"[SSL] Error configuring SSL: {e}")
 
-# Используем разные User-Agent для Android и десктопа
-if is_android:
-    user_agent = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-    print("[USER-AGENT] Using mobile User-Agent for Android")
-else:
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
 session.headers.update(
     {
-        "User-Agent": user_agent,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
     }
@@ -240,79 +211,19 @@ def _extract_text_from_html(html: str) -> str | None:
         except Exception:
             pass
 
-    # Ищем основной контент в порядке приоритета
-    candidates = [
-        soup.find("article"),
-        soup.find("main"),
-        soup.find("div", {"class": lambda x: x and any(k in str(x).lower() for k in ["article", "post", "content", "entry", "story"])}),
-        soup.find("div", {"id": lambda x: x and any(k in str(x).lower() for k in ["article", "post", "content", "entry", "story"])}),
-        soup.body,
-        soup
-    ]
-    
-    node = None
-    for candidate in candidates:
-        if candidate:
-            print(f"[EXTRACT] Using node: {candidate.name if hasattr(candidate, 'name') else 'unknown'}")
-            node = candidate
-            break
-    
-    if not node:
-        print("[EXTRACT] No suitable node found")
-        return None
+    node = soup.find("article") or soup.find("main") or soup.body or soup
 
     chunks: list[str] = []
-    seen_texts = set()  # Для более эффективной проверки дубликатов
-    
-    # Собираем текст из параграфов, заголовков, списков - приоритет основным тегам
-    priority_tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"]
-    secondary_tags = ["li", "div", "section", "article", "td"]
-    
-    print(f"[EXTRACT] Searching for content in {node.name}...")
-    
-    # Сначала ищем в приоритетных тегах
-    for el in node.find_all(priority_tags):
+    for el in node.find_all(["h1", "h2", "h3", "p", "li"], limit=400):
         t = el.get_text(" ", strip=True)
-        # Минимальная длина 20 символов для основного текста
-        if t and len(t) >= 20:
-            # Проверяем что текст не повторяется
-            if t not in seen_texts:
-                # Проверяем что это не навигация/меню (обычно много ссылок)
-                links = el.find_all("a")
-                if len(links) > 5 and len(t) < 150:
-                    continue
-                print(f"[EXTRACT] Priority chunk: {len(t)} chars from {el.name}")
-                chunks.append(t)
-                seen_texts.add(t)
-    
-    # Если нашли мало текста, ищем в дополнительных тегах
-    if len(chunks) < 3 or sum(len(c) for c in chunks) < 300:
-        print(f"[EXTRACT] Not enough content ({len(chunks)} chunks, {sum(len(c) for c in chunks)} chars), searching secondary tags...")
-        for el in node.find_all(secondary_tags):
-            t = el.get_text(" ", strip=True)
-            if t and len(t) >= 30 and t not in seen_texts:  # Для div/section требуем минимум 30 символов
-                # Пропускаем элементы с множеством дочерних блоков (скорее всего контейнеры)
-                if el.name in ["div", "section"] and len(el.find_all(["div", "section"], recursive=False)) > 3:
-                    continue
-                links = el.find_all("a")
-                if len(links) > 5 and len(t) < 150:
-                    continue
-                print(f"[EXTRACT] Secondary chunk: {len(t)} chars from {el.name}")
-                chunks.append(t)
-                seen_texts.add(t)
+        if t and len(t) >= 40:
+            chunks.append(t)
 
     if chunks:
-        text = "\n\n".join(chunks)
-        print(f"[EXTRACT] Extracted {len(text)} chars from {len(chunks)} chunks")
-        return text
+        return "\n\n".join(chunks)
 
-    # Fallback: raw text из всего node
-    print("[EXTRACT] Using fallback: raw text extraction")
+    # Fallback: raw text
     txt = node.get_text("\n", strip=True)
-    if txt:
-        print(f"[EXTRACT] Fallback extraction: {len(txt)} chars")
-        # Очищаем от множественных переносов строк
-        txt = re.sub(r'\n{3,}', '\n\n', txt)
     return txt or None
 
 
@@ -726,7 +637,6 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
     
     print(f"[FETCH] Starting fetch for: {url[:80]}")
     print(f"[FETCH] Depth: {_depth}, Title: {title[:50] if title else 'None'}")
-    print(f"[FETCH] Platform: {'Android' if is_android else 'Desktop'}")
     
     # Try to decode Google News URL to avoid consent wall
     real_url = decode_google_news_url(url)
@@ -736,36 +646,8 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
 
     try:
         print(f"[FETCH] Making HTTP request...")
-        # На Android увеличиваем таймауты и пробуем несколько раз
-        if is_android:
-            timeout = (10, 30)
-            max_attempts = 3
-        else:
-            timeout = (5, 20)
-            max_attempts = 1
-        
-        response = None
-        last_error = None
-        
-        for attempt in range(max_attempts):
-            try:
-                print(f"[FETCH] Attempt {attempt + 1}/{max_attempts}")
-                response = session.get(url, timeout=timeout)
-                print(f"[FETCH] Success! Status: {response.status_code}")
-                break
-            except Exception as e:
-                last_error = e
-                print(f"[FETCH] Attempt {attempt + 1} failed: {type(e).__name__}: {str(e)[:100]}")
-                if attempt < max_attempts - 1:
-                    import time
-                    time.sleep(1)
-        
-        if response is None:
-            error_msg = f"Не удалось загрузить статью после {max_attempts} попыток"
-            if last_error:
-                error_msg += f": {type(last_error).__name__}: {str(last_error)[:100]}"
-            print(f"[FETCH] ERROR: {error_msg}")
-            return {"full_text": error_msg, "image": None}
+        # Use shared session (connection pooling) and a split timeout (connect, read)
+        response = session.get(url, timeout=(5, 20))
         print(f"[FETCH] Response: {response.status_code}, length: {len(response.text)} bytes")
         # Не затираем корректную кодировку из заголовков; но если requests поставил latin-1,
         # пробуем определить реальную.
@@ -796,51 +678,28 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
              return {"full_text": "Статья недоступна (требуется согласие на cookies). Попробуйте другую новость.", "image": None}
 
         # Важно: favor полноту, tables иногда содержат основной контент
-        full_html = response.text
-        html_size = len(full_html)
-        html = full_html
-        
-        # Логируем начало HTML для диагностики на Android
-        if is_android:
-            html_preview = html[:500].replace('\n', ' ')[:500]
-            print(f"[FETCH] HTML size: {html_size} bytes")
-            print(f"[FETCH] HTML preview: {html_preview}...")
-            
-            # Проверяем есть ли основные HTML теги
-            has_body = '<body' in html.lower()
-            has_article = '<article' in html.lower()
-            has_main = '<main' in html.lower()
-            has_paragraphs = '<p>' in html.lower() or '<p ' in html.lower()
-            print(f"[FETCH] HTML structure: body={has_body}, article={has_article}, main={has_main}, paragraphs={has_paragraphs}")
-            
-            # На Android ограничиваем размер HTML для ускорения парсинга
-            # BeautifulSoup очень медленно работает с огромными файлами на мобильных устройствах
-            if html_size > 500000:  # 500KB
-                print(f"[FETCH] HTML too large ({html_size} bytes), truncating to 500KB for faster parsing")
-                html = full_html[:500000]
+        html = response.text
 
         # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
-        print(f"[FETCH] Starting text extraction from {len(html)} bytes...")
         text = _extract_text_from_html(html)
-        print(f"[FETCH] Extraction completed, got {len(text) if text else 0} chars")
         # Если это агрегатор/пересказ и текста мало — попробуем перейти на canonical/первоисточник (1 шаг)
         if (
             _depth < 1
             and (text is None or len((text or "").strip()) < 800)
-            and "<html" in full_html.lower()
+            and "<html" in html.lower()
         ):
             try:
                 source_url = None
                 # Быстрый regex для canonical/og:url
                 m = re.search(
                     r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
-                    full_html,
+                    html,
                     flags=re.IGNORECASE,
                 )
                 if not m:
                     m = re.search(
                         r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)["\']',
-                        full_html,
+                        html,
                         flags=re.IGNORECASE,
                     )
                 if m:
@@ -848,7 +707,7 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
                 else:
                     # Пытаемся найти ссылку "Источник"/"Первоисточник" через bs4
                     if BeautifulSoup is not None:
-                        soup = BeautifulSoup(full_html, "html.parser")
+                        soup = BeautifulSoup(html, "html.parser")
                         for a in soup.find_all("a", href=True):
                             label = a.get_text(" ", strip=True).lower()
                             if any(k in label for k in ("источник", "первоисточник", "original", "source")):
@@ -928,19 +787,14 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
 
         return {"full_text": formatted_text, "image": image_url}
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"[FETCH] EXCEPTION: {type(e).__name__}: {str(e)}")
-        print(f"[FETCH] Traceback:\n{error_details}")
-        return {"full_text": f"Ошибка при загрузке статьи: {type(e).__name__}: {str(e)}", "image": None}
+        return {"full_text": f"Ошибка при загрузке статьи: {e}", "image": None}
 
 
-def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "bing") -> List[Dict]:
+def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "yandex") -> List[Dict]:
     """Синхронная версия: новости + полный текст параллельно.
 
     NOTE: For Android build reliability we avoid DDG client libraries (ddgs pulls
-    in native lxml). Primary sources: Bing News RSS (primary) with Google/Yandex
-    fallbacks for resilience.
+    in native lxml). Primary sources: Yandex News or Google News RSS.
     
     Args:
         query: Поисковый запрос

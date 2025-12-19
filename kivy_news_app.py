@@ -34,7 +34,7 @@ from kivymd.uix.dialog import MDDialog
 from news_search_core import get_news_with_content, fetch_article_text, fetch_article_content
 from backend import get_weather, get_financial_data, get_google_trends
 from llm_integration import llm_client
-from app_version import APP_VERSION
+from news_parser_manual import WebViewWidget
 
 
 class ResultCard(MDCard):
@@ -304,7 +304,7 @@ class SearchScreen(Screen):
                 padding="4dp",
                 spacing="4dp",
             )
-            card = ResultCard(payload, on_read=self.app.show_article)
+            card = ResultCard(payload, on_read=self.app.show_article_in_webview)
             card_container.add_widget(card)
             self.results_list.add_widget(card_container)
 
@@ -658,18 +658,62 @@ class HomeScreen(Screen):
         cat_card.add_widget(cat_layout)
         root.add_widget(cat_card)
 
-        version_label = MDLabel(
-            text=f"Версия {APP_VERSION}",
-            theme_text_color="Secondary",
-            halign="center",
-            size_hint_y=None,
-            height="20dp",
-            font_size="12sp",
-        )
-        root.add_widget(version_label)
-
         scroll.add_widget(root)
         self.add_widget(scroll)
+
+
+class WebViewScreen(Screen):
+    """Экран с WebView для отображения статей."""
+
+    def __init__(self, app: NewsSearchApp, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.app = app
+        self.current_url = None
+        self.webview_widget = None
+        
+        layout = MDBoxLayout(orientation="vertical", padding="0dp", spacing="0dp")
+        
+        # Верхняя панель
+        top_bar = MDBoxLayout(size_hint_y=None, height="56dp", spacing="10dp", padding="12dp")
+        back_button = MDIconButton(icon="arrow-left", icon_size="28sp")
+        back_button.bind(on_release=lambda *_: self.app.go_back())
+        
+        title = MDLabel(text="Статья", theme_text_color="Primary", font_style="H6", bold=True)
+        
+        # Кнопка открыть в браузере
+        browser_button = MDIconButton(icon="web", icon_size="24sp")
+        browser_button.bind(on_release=self.open_in_browser)
+        
+        top_bar.add_widget(back_button)
+        top_bar.add_widget(title)
+        top_bar.add_widget(browser_button)
+        
+        # WebView контейнер
+        self.webview_container = MDBoxLayout(orientation="vertical")
+        
+        layout.add_widget(top_bar)
+        layout.add_widget(self.webview_container)
+        self.add_widget(layout)
+    
+    def load_url(self, url: str):
+        """Загрузить URL в WebView."""
+        self.current_url = url
+        
+        # Очищаем контейнер
+        self.webview_container.clear_widgets()
+        
+        # Создаём новый WebView
+        self.webview_widget = WebViewWidget()
+        self.webview_container.add_widget(self.webview_widget)
+        
+        # Загружаем URL
+        self.webview_widget.load_url(url)
+    
+    def open_in_browser(self, *args):
+        """Открыть в браузере."""
+        if self.current_url:
+            import webbrowser
+            webbrowser.open(self.current_url)
 
 
 class ArticleScreen(Screen):
@@ -679,7 +723,10 @@ class ArticleScreen(Screen):
         super().__init__(**kwargs)
         self.app = app
         self.current_article = None
-        layout = MDBoxLayout(orientation="vertical", padding="12dp", spacing="12dp")
+        self.view_mode = "text"  # "text" или "webview"
+        self.webview_widget = None
+        
+        self.layout = MDBoxLayout(orientation="vertical", padding="12dp", spacing="12dp")
 
         top_bar = MDBoxLayout(size_hint_y=None, height="56dp", spacing="10dp")
         back_button = MDIconButton(icon="arrow-left", icon_size="28sp")
@@ -687,7 +734,12 @@ class ArticleScreen(Screen):
         title = MDLabel(text="Полный текст", theme_text_color="Primary", font_style="H6")
         
         # Кнопки действий
-        actions_box = MDBoxLayout(orientation="horizontal", size_hint_x=None, width="96dp", spacing="4dp")
+        actions_box = MDBoxLayout(orientation="horizontal", size_hint_x=None, width="144dp", spacing="4dp")
+        
+        # Кнопка переключения режима просмотра
+        self.view_mode_button = MDIconButton(icon="eye-outline", icon_size="24sp")
+        self.view_mode_button.bind(on_release=self.toggle_view_mode)
+        actions_box.add_widget(self.view_mode_button)
         
         browser_button = MDIconButton(icon="web", icon_size="24sp")
         browser_button.bind(on_release=self.open_in_browser)
@@ -701,6 +753,12 @@ class ArticleScreen(Screen):
         top_bar.add_widget(title)
         top_bar.add_widget(actions_box)
 
+        # Контейнер для контента (текст или webview)
+        self.content_container = MDBoxLayout(orientation="vertical")
+        
+        # Текстовый режим (по умолчанию)
+        self.text_mode_layout = MDBoxLayout(orientation="vertical")
+        
         self.image = AsyncImage(
             source="",
             size_hint_y=None,
@@ -708,6 +766,7 @@ class ArticleScreen(Screen):
             allow_stretch=True,
             keep_ratio=True,
         )
+        self.text_mode_layout.add_widget(self.image)
 
         self.scroll = MDScrollView()
         self.text_label = MDLabel(
@@ -828,10 +887,12 @@ class NewsSearchApp(MDApp):
         self.home_screen = HomeScreen(app=self, name="home")
         self.search_screen = SearchScreen(app=self, name="search")
         self.article_screen = ArticleScreen(app=self, name="article")
+        self.webview_screen = WebViewScreen(app=self, name="webview")
 
         self.screen_manager.add_widget(self.home_screen)
         self.screen_manager.add_widget(self.search_screen)
         self.screen_manager.add_widget(self.article_screen)
+        self.screen_manager.add_widget(self.webview_screen)
 
         # Toolbar (simple, title centered)
         toolbar = AnchorLayout(size_hint_y=None, height="56dp")
@@ -899,6 +960,15 @@ class NewsSearchApp(MDApp):
         except Exception:
             pass
         self.screen_manager.current = screen_name
+    
+    def show_article_in_webview(self, link: str) -> None:
+        """Открыть статью в WebView."""
+        if not link:
+            toast("Ссылка недоступна.")
+            return
+        
+        self.screen_manager.current = "webview"
+        self.webview_screen.load_url(link)
 
     def show_article(self, link: str) -> None:
         if not link:
