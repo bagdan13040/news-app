@@ -25,6 +25,13 @@ except ImportError:
     DDGS = None
 
 try:
+    import trafilatura
+    TRAFILATURA_AVAILABLE = True
+except ImportError:
+    TRAFILATURA_AVAILABLE = False
+    trafilatura = None
+
+try:
     from bs4 import BeautifulSoup  # type: ignore[import]
 except Exception:  # pragma: no cover
     BeautifulSoup = None
@@ -206,7 +213,10 @@ def _search_news_ddg(query: str, max_results: int = 20) -> List[Dict[str, str]]:
 
 
 def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -> dict:
-    """Скачивает и извлекает полный текст новости по ссылке + картинку."""
+    """Скачивает и извлекает полный текст новости по ссылке + картинку.
+    
+    Использует trafilatura (как в mobile_pack) для качественного извлечения полного текста.
+    """
     try:
         # Use shared session (connection pooling) and a split timeout (connect, read)
         response = session.get(url, timeout=(5, 20), allow_redirects=True)
@@ -219,8 +229,17 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
 
         html = response.text
 
-        # Pure-Python extraction
-        text = _extract_text_from_html(html)
+        # CRITICAL: Use trafilatura for high-quality full text extraction (like mobile_pack)
+        text = None
+        if TRAFILATURA_AVAILABLE:
+            try:
+                text = trafilatura.extract(html, target_language='ru')
+            except Exception as e:
+                print(f"Trafilatura extraction failed: {e}")
+        
+        # Fallback to BeautifulSoup if trafilatura failed or not available
+        if text is None:
+            text = _extract_text_from_html(html)
         
         # Если текста мало и это агрегатор — попробуем перейти на canonical/первоисточник
         if (
@@ -269,6 +288,7 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
         if text is None:
             formatted_text = "Не удалось извлечь текст (возможно, защита от ботов)."
         else:
+            # Обработка текста для добавления разрывов между абзацами (как в mobile_pack)
             paragraphs = text.split("\n")
             clean_paragraphs = [p.strip() for p in paragraphs if p.strip()]
             formatted_text = "\n\n".join(clean_paragraphs)
