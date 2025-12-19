@@ -253,6 +253,231 @@ def _parse_date(date_str: str):
             return None
 
 
+def _newsapi_org_search(query: str, max_results: int = 20, api_key: str = None) -> List[Dict[str, str]]:
+    """NewsAPI.org search (требует API ключ, но есть бесплатный тарif).
+    
+    Получить бесплатный ключ: https://newsapi.org/register
+    """
+    
+    if not api_key:
+        api_key = os.environ.get("NEWSAPI_KEY")
+        if not api_key:
+            print("[NEWSAPI] No API key provided")
+            return []
+    
+    q = (query or "").strip()
+    if not q:
+        print("[NEWSAPI] Empty query")
+        return []
+
+    url = f"https://newsapi.org/v2/everything?q={quote_plus(q)}&language=ru&sortBy=publishedAt&pageSize={max_results}&apiKey={api_key}"
+
+    print(f"[NEWSAPI] Fetching from NewsAPI.org for '{q}'")
+    
+    try:
+        resp = session.get(url, timeout=(10, 30))
+        print(f"[NEWSAPI] Response status: {resp.status_code}")
+        
+        if not resp.ok:
+            print(f"[NEWSAPI] Bad response: {resp.status_code}")
+            return []
+        
+        data = resp.json()
+        articles = data.get("articles", [])
+        
+        out: List[Dict[str, str]] = []
+        for article in articles[:max_results]:
+            try:
+                title = article.get("title", "").strip()
+                url = article.get("url", "").strip()
+                published_at = article.get("publishedAt", "").strip()
+                source = article.get("source", {}).get("name", "NewsAPI")
+                description = article.get("description", "").strip()
+                image_url = article.get("urlToImage")
+                
+                if not url:
+                    continue
+                    
+                out.append({
+                    "title": title,
+                    "url": url,
+                    "date": published_at,
+                    "source": source,
+                    "body": description,
+                    "image": image_url,
+                })
+            except Exception as e:
+                print(f"[NEWSAPI] Error parsing article: {e}")
+                continue
+        
+        print(f"[NEWSAPI] Found {len(out)} articles")
+        return out
+        
+    except Exception as e:
+        print(f"[NEWSAPI] Error: {type(e).__name__}: {e}")
+        return []
+
+
+def _bing_news_search(query: str, max_results: int = 20) -> List[Dict[str, str]]:
+    """Bing News RSS search (работает без API ключа)."""
+    
+    q = (query or "").strip()
+    if not q:
+        print("[BING] Empty query")
+        return []
+
+    # Bing News RSS
+    rss_url = f"https://www.bing.com/news/search?q={quote_plus(q)}&format=rss&setlang=ru"
+
+    print(f"[BING] Fetching Bing News RSS for '{q}'")
+    
+    try:
+        resp = session.get(rss_url, timeout=(10, 30))
+        print(f"[BING] Response status: {resp.status_code}")
+        
+        if not resp.ok:
+            print(f"[BING] Bad response: {resp.status_code}")
+            return []
+            
+    except Exception as e:
+        print(f"[BING] Error: {type(e).__name__}: {e}")
+        return []
+
+    # Parse RSS XML
+    try:
+        root = ET.fromstring(resp.text)
+        channel = root.find("channel")
+        if channel is None:
+            return []
+
+        out: List[Dict[str, str]] = []
+        for item in channel.findall("item")[:max_results]:
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub = (item.findtext("pubDate") or "").strip()
+            description = (item.findtext("description") or "").strip()
+            
+            # Clean HTML from description
+            if description and "<" in description:
+                description = re.sub(r'<[^>]+>', '', description)
+            
+            if not link:
+                continue
+                
+            out.append({
+                "title": title,
+                "url": link,
+                "date": pub,
+                "source": "Bing News",
+                "body": description,
+                "image": None,
+            })
+        
+        print(f"[BING] Found {len(out)} articles")
+        return out
+        
+    except Exception as e:
+        print(f"[BING] Parse error: {e}")
+        return []
+
+
+def _yandex_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str, str]]:
+    """Yandex News RSS search (pure-Python, без API ключей).
+
+    Returns items in a DDG-like shape: title/url/date/source/body/image.
+    """
+
+    q = (query or "").strip()
+    if not q:
+        print("[YANDEX] Empty query")
+        return []
+
+    # Yandex News RSS поиск
+    rss_url = f"https://news.yandex.ru/yandsearch?text={quote_plus(q)}&rpt=nnews2&grhow=clutop"
+
+    print(f"[YANDEX] Fetching Yandex News RSS for '{q}'")
+    print(f"[YANDEX] URL: {rss_url}")
+    
+    try:
+        print(f"[YANDEX] Making request with timeout (10, 30)...")
+        resp = session.get(rss_url, timeout=(10, 30))
+        print(f"[YANDEX] Response status: {resp.status_code}")
+        print(f"[YANDEX] Response length: {len(resp.text)} bytes")
+        
+        if not resp.ok:
+            print(f"[YANDEX] Bad response: {resp.status_code} - {resp.reason}")
+            return []
+        
+        if len(resp.text) < 100:
+            print(f"[YANDEX] Response too short, likely error")
+            return []
+            
+    except Exception as e:
+        print(f"[YANDEX] Error: {type(e).__name__}: {e}")
+        return []
+
+    # Parse HTML response (Yandex возвращает HTML, не RSS XML)
+    if not BeautifulSoup:
+        print("[YANDEX] BeautifulSoup not available")
+        return []
+    
+    try:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        articles = soup.find_all("div", class_="story") or soup.find_all("article")
+        
+        out: List[Dict[str, str]] = []
+        for article in articles[:max_results]:
+            try:
+                # Извлекаем заголовок и ссылку
+                title_elem = article.find("a", class_="story__title") or article.find("h2") or article.find("a")
+                if not title_elem:
+                    continue
+                    
+                title = title_elem.get_text(strip=True)
+                link = title_elem.get("href", "")
+                
+                # Делаем ссылку абсолютной
+                if link and not link.startswith("http"):
+                    link = "https://news.yandex.ru" + link
+                
+                # Извлекаем источник
+                source_elem = article.find("a", class_="story__source") or article.find("span", class_="source")
+                source = source_elem.get_text(strip=True) if source_elem else "Yandex News"
+                
+                # Извлекаем описание
+                desc_elem = article.find("div", class_="story__text") or article.find("p")
+                description = desc_elem.get_text(strip=True) if desc_elem else ""
+                
+                # Извлекаем дату
+                date_elem = article.find("span", class_="story__date") or article.find("time")
+                date_str = date_elem.get_text(strip=True) if date_elem else ""
+                
+                if not link:
+                    continue
+                    
+                out.append({
+                    "title": title,
+                    "url": link,
+                    "date": date_str,
+                    "source": source,
+                    "body": description,
+                    "image": None,
+                })
+                
+            except Exception as e:
+                print(f"[YANDEX] Error parsing article: {e}")
+                continue
+        
+        print(f"[YANDEX] Found {len(out)} articles")
+        return out
+        
+    except Exception as e:
+        print(f"[YANDEX] Parse error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
 def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str, str]]:
     """Fallback news search via Google News RSS (pure-Python).
 
@@ -565,11 +790,17 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0, t
         return {"full_text": f"Ошибка при загрузке статьи: {e}", "image": None}
 
 
-def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True) -> List[Dict]:
+def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool = True, source: str = "yandex") -> List[Dict]:
     """Синхронная версия: новости + полный текст параллельно.
 
     NOTE: For Android build reliability we avoid DDG client libraries (ddgs pulls
-    in native lxml). Primary source is Google News RSS.
+    in native lxml). Primary sources: Yandex News or Google News RSS.
+    
+    Args:
+        query: Поисковый запрос
+        max_results: Максимальное количество результатов
+        fetch_content: Загружать ли полный текст статей
+        source: Источник новостей - "yandex", "google" или "both"
     """
     if not query:
         return []
@@ -580,10 +811,51 @@ def get_news_with_content(query: str, max_results: int = 6, fetch_content: bool 
 
     fetch_candidates = max(max_results * 3, 50)
 
-    # Primary: Google News RSS
+    # Выбираем источник новостей
+    results = []
     try:
-        results = _google_news_rss_search(search_query, max_results=fetch_candidates)
-    except Exception:
+        if source == "bing":
+            print(f"[SEARCH] Using Bing News as primary source")
+            results = _bing_news_search(search_query, max_results=fetch_candidates)
+            if not results:
+                print(f"[SEARCH] Bing returned no results, trying Google News")
+                results = _google_news_rss_search(search_query, max_results=fetch_candidates)
+        elif source == "newsapi":
+            print(f"[SEARCH] Using NewsAPI.org as primary source")
+            results = _newsapi_org_search(search_query, max_results=fetch_candidates)
+            if not results:
+                print(f"[SEARCH] NewsAPI returned no results, trying Google News")
+                results = _google_news_rss_search(search_query, max_results=fetch_candidates)
+        elif source == "yandex":
+            print(f"[SEARCH] Using Yandex News as primary source")
+            results = _yandex_news_rss_search(search_query, max_results=fetch_candidates)
+            if not results:
+                print(f"[SEARCH] Yandex returned no results, trying Google News")
+                results = _google_news_rss_search(search_query, max_results=fetch_candidates)
+        elif source == "google":
+            print(f"[SEARCH] Using Google News as primary source")
+            results = _google_news_rss_search(search_query, max_results=fetch_candidates)
+            if not results:
+                print(f"[SEARCH] Google returned no results, trying Bing News")
+                results = _bing_news_search(search_query, max_results=fetch_candidates)
+        elif source == "both":
+            print(f"[SEARCH] Using both Yandex and Google News")
+            yandex_results = _yandex_news_rss_search(search_query, max_results=fetch_candidates // 2)
+            google_results = _google_news_rss_search(search_query, max_results=fetch_candidates // 2)
+            results = yandex_results + google_results
+        elif source == "all":
+            print(f"[SEARCH] Using all sources (Bing, Google)")
+            bing_results = _bing_news_search(search_query, max_results=fetch_candidates // 2)
+            google_results = _google_news_rss_search(search_query, max_results=fetch_candidates // 2)
+            results = bing_results + google_results
+        else:
+            # Default to Bing (обычно работает без блокировок)
+            print(f"[SEARCH] Unknown source '{source}', using Bing")
+            results = _bing_news_search(search_query, max_results=fetch_candidates)
+            if not results:
+                results = _google_news_rss_search(search_query, max_results=fetch_candidates)
+    except Exception as e:
+        print(f"[SEARCH] Error fetching from {source}: {e}")
         return []
 
     # Фильтруем результаты по дате — расширяющееся окно (7, 14, 30 дней)

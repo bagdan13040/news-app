@@ -223,7 +223,8 @@ class SearchScreen(Screen):
             Clock.schedule_once(partial(self._set_status, "Загружаю новости..."), 0)
             
             print(f"[SEARCH] Calling get_news_with_content...")
-            results = get_news_with_content(query, max_results=15, fetch_content=False)
+            # Используем "all" для поиска из нескольких источников (Bing + Google)
+            results = get_news_with_content(query, max_results=15, fetch_content=False, source="all")
             print(f"[SEARCH] get_news_with_content returned {len(results)} results")
             
             if not results:
