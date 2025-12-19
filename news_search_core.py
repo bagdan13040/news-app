@@ -15,6 +15,7 @@ from typing import Dict, List
 import requests
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
+from urllib.parse import urljoin, urlparse, unquote
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -32,7 +33,9 @@ executor = ThreadPoolExecutor(max_workers=DEFAULT_WORKERS)
 session = requests.Session()
 session.headers.update(
     {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     }
 )
 retries = Retry(total=3, connect=3, read=3, backoff_factor=0.5, status_forcelist=(500, 502, 503, 504))
@@ -145,6 +148,7 @@ def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str,
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
         pub = (item.findtext("pubDate") or "").strip()
+        desc = (item.findtext("description") or "").strip()
 
         # Optional: <source> tag contains publisher name.
         src_tag = item.find("source")
@@ -152,20 +156,97 @@ def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str,
 
         if not link:
             continue
+        body = ""
+        image = None
+        # Google News RSS often embeds snippet + preview image in <description> as HTML.
+        if desc:
+            if BeautifulSoup is not None:
+                try:
+                    soup = BeautifulSoup(desc, "html.parser")
+                    img = soup.find("img")
+                    if img and img.get("src"):
+                        image = img.get("src")
+                    body = soup.get_text(" ", strip=True) or ""
+                except Exception:
+                    body = re.sub(r"<[^>]+>", " ", desc)
+            else:
+                body = re.sub(r"<[^>]+>", " ", desc)
+
+        # Normalize whitespace
+        body = re.sub(r"\s+", " ", body).strip()
+
         out.append(
             {
                 "title": title,
                 "url": link,
                 "date": pub,
                 "source": source or "Google News",
-                "body": "",
-                "image": None,
+                "body": body,
+                "image": image,
             }
         )
         if len(out) >= max_results:
             break
 
     return out
+
+
+def _extract_google_news_source_url(html: str, base_url: str) -> str | None:
+    """Best-effort extraction of publisher URL from a Google News landing page."""
+    if not html:
+        return None
+
+    # Prefer canonical/og:url first (often points to publisher)
+    try:
+        m = re.search(
+            r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
+            html,
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            m = re.search(
+                r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)["\']',
+                html,
+                flags=re.IGNORECASE,
+            )
+        if m:
+            u = m.group(1)
+            u = urljoin(base_url, u)
+            if u:
+                return u
+    except Exception:
+        pass
+
+    # Google often includes a redirect like ...?url=https%3A%2F%2Fpublisher...
+    try:
+        for m in re.finditer(r"[?&]url=([^&\"'>]+)", html, flags=re.IGNORECASE):
+            raw = m.group(1)
+            cand = unquote(raw)
+            if cand.startswith("http"):
+                host = urlparse(cand).netloc.lower()
+                if host and "google." not in host:
+                    return cand
+    except Exception:
+        pass
+
+    # BS4 fallback: pick first non-google https link in anchors
+    if BeautifulSoup is not None:
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a.get("href")
+                if not href:
+                    continue
+                href = urljoin(base_url, href)
+                if not href.startswith("http"):
+                    continue
+                host = urlparse(href).netloc.lower()
+                if host and "google." not in host:
+                    return href
+        except Exception:
+            pass
+
+    return None
 
 
 def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -> dict:
@@ -183,6 +264,18 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
 
         # Важно: favor полноту, tables иногда содержат основной контент
         html = response.text
+
+        # If we landed on a Google News page, try to jump to the publisher once.
+        try:
+            if _depth < 1 and ("news.google.com" in (response.url or "") or "news.google.com" in (url or "")):
+                src = _extract_google_news_source_url(html, response.url or url)
+                if src and src != url:
+                    alt = _fetch_article_text(src, existing_image=existing_image, _depth=_depth + 1)
+                    alt_text = (alt.get("full_text") or "").strip()
+                    if len(alt_text) > 200:
+                        return alt
+        except Exception:
+            pass
 
         # Pure-Python extraction (avoid lxml-based dependencies in Android builds)
         text = _extract_text_from_html(html)
@@ -221,8 +314,6 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
                 if source_url and source_url != url:
                     # Некоторые сайты дают относительные URL
                     try:
-                        from urllib.parse import urljoin
-
                         source_url = urljoin(url, source_url)
                     except Exception:
                         pass
@@ -283,8 +374,6 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
                             if first_img and first_img.get("src"):
                                 image_url = first_img.get("src")
                         if image_url:
-                            from urllib.parse import urljoin
-
                             image_url = urljoin(response.url, image_url)
                     except Exception:
                         pass
@@ -295,11 +384,21 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
 
 
 def get_news_with_content(query: str, max_results: int = 6) -> List[Dict]:
-    """Синхронная версия: новости + полный текст параллельно.
+    """Новости из RSS.
+
+    По умолчанию возвращаем быстрые результаты (title/link/snippet/image) без
+    скачивания и парсинга полного текста — это ускоряет поиск в разы на телефоне.
+
+    Полный текст нужно получать по требованию через fetch_article()/fetch_article_text().
 
     NOTE: For Android build reliability we avoid DDG client libraries (ddgs pulls
     in native lxml). Primary source is Google News RSS.
     """
+    return get_news(query, max_results=max_results, fetch_full_text=False)
+
+
+def get_news(query: str, max_results: int = 6, fetch_full_text: bool = False) -> List[Dict]:
+    """Возвращает новости. Если fetch_full_text=True — параллельно вытаскивает полный текст."""
     if not query:
         return []
 
@@ -337,14 +436,31 @@ def get_news_with_content(query: str, max_results: int = 6) -> List[Dict]:
 
     filtered_results = filtered_results[:max_results]
 
-    # Параллельно качаем статьи
+    # Fast path: do not fetch full text during search.
+    if not fetch_full_text:
+        news_list: List[Dict] = []
+        for item in filtered_results:
+            news_list.append(
+                {
+                    "title": item.get("title"),
+                    "link": item.get("url"),
+                    "published": item.get("date"),
+                    "source": item.get("source"),
+                    "description": item.get("body") or "",
+                    "image": item.get("image"),
+                    "full_text": "",
+                }
+            )
+        return news_list
+
+    # Slow path: fetch full text in parallel.
     futures = []
     for item in filtered_results:
         url = item.get("url")
         existing_image = item.get("image")
         futures.append(executor.submit(_fetch_article_text, url, existing_image))
 
-    news_list: List[Dict] = []
+    news_list2: List[Dict] = []
     for item, fut in zip(filtered_results, futures):
         try:
             res = fut.result()
@@ -357,18 +473,23 @@ def get_news_with_content(query: str, max_results: int = 6) -> List[Dict]:
             "link": item.get("url"),
             "published": item.get("date"),
             "source": item.get("source"),
-            "description": item.get("body"),
+            "description": item.get("body") or "",
             "image": image_url,
             "full_text": res.get("full_text") or "",
         }
-        news_list.append(news_item)
+        news_list2.append(news_item)
 
-    return news_list
+    return news_list2
+
+
+def fetch_article(url: str) -> dict:
+    """Единичная загрузка статьи (текст + картинка)."""
+    return _fetch_article_text(url) or {"full_text": "", "image": None}
 
 
 def fetch_article_text(url: str) -> str:
     """Единичная загрузка текста (без обрезания)."""
-    return (_fetch_article_text(url) or {}).get("full_text") or ""
+    return (fetch_article(url) or {}).get("full_text") or ""
 
 
-__all__ = ["get_news_with_content", "fetch_article_text"]
+__all__ = ["get_news_with_content", "get_news", "fetch_article", "fetch_article_text"]

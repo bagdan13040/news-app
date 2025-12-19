@@ -31,7 +31,7 @@ from kivymd.uix.navigationdrawer import MDNavigationLayout, MDNavigationDrawer
 from kivymd.toast import toast
 from kivymd.uix.dialog import MDDialog
 
-from news_search_core import get_news_with_content, fetch_article_text
+from news_search_core import get_news_with_content
 from backend import get_weather, get_financial_data, get_google_trends
 from llm_integration import llm_client
 
@@ -156,38 +156,12 @@ class SearchScreen(Screen):
         try:
             # Получаем основные результаты
             print(f"[SEARCH] Searching for: {query}")
+            # IMPORTANT: keep search fast on mobile; full text is fetched on demand.
             results = get_news_with_content(query, max_results=6)
             print(f"[SEARCH] Found {len(results)} initial results")
-            
-            # Подбираем синонимы и ищем по ним тоже
-            try:
-                print(f"[SYNONYMS] Generating synonyms for: {query}")
-                synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=2.0)
-                print(f"[SYNONYMS] Got synonyms: {synonyms}")
-                
-                for synonym in synonyms:
-                    if synonym.lower() != query.lower():
-                        print(f"[SYNONYMS] Searching for synonym: {synonym}")
-                        syn_results = get_news_with_content(synonym, max_results=2)
-                        print(f"[SYNONYMS] Found {len(syn_results)} results for '{synonym}'")
-                        results.extend(syn_results)
-            except Exception as e:
-                print(f"[SYNONYMS] Error: {e}")
-                import traceback
-                traceback.print_exc()
-            
-            # Удаляем дубликаты по ссылке
-            seen_links = set()
-            unique_results = []
-            for r in results:
-                link = r.get("link", "")
-                if link and link not in seen_links:
-                    seen_links.add(link)
-                    unique_results.append(r)
-                elif not link:
-                    unique_results.append(r)
-            results = unique_results[:10]  # Ограничиваем до 10 результатов
-            print(f"[SEARCH] Total unique results: {len(results)}")
+
+            # Show initial results ASAP.
+            Clock.schedule_once(partial(self._populate_results, results, query), 0)
             
         except Exception as exc:
             print(f"[SEARCH] Error: {exc}")
@@ -195,7 +169,28 @@ class SearchScreen(Screen):
             traceback.print_exc()
             Clock.schedule_once(partial(self._set_status, f"Ошибка поиска: {exc}"), 0)
             return
-        Clock.schedule_once(partial(self._populate_results, results, query), 0)
+
+        # Background enrichment: synonyms-based extra results (non-blocking UI).
+        try:
+            print(f"[SYNONYMS] Generating synonyms for: {query}")
+            synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=1.5)
+            synonyms = [s for s in synonyms if s and s.lower() != query.lower()]
+            if not synonyms:
+                return
+            print(f"[SYNONYMS] Got synonyms: {synonyms}")
+
+            extra: List[Dict[str, str]] = []
+            for synonym in synonyms:
+                print(f"[SYNONYMS] Searching for synonym: {synonym}")
+                syn_results = get_news_with_content(synonym, max_results=2)
+                extra.extend(syn_results)
+
+            if extra:
+                Clock.schedule_once(partial(self._append_results, extra), 0)
+        except Exception as e:
+            print(f"[SYNONYMS] Error: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _set_status(self, text: str, _: float) -> None:
         self.status_label.text = text
@@ -204,6 +199,8 @@ class SearchScreen(Screen):
         if not results:
             self.status_label.text = f"По запросу \"{query}\" ничего не найдено."
             return
+        # reset list (new search)
+        self.results_list.clear_widgets()
         self.status_label.text = f"Найдено {len(results)} результата."
         for idx, payload in enumerate(results):
             # Контейнер для каждой карточки
@@ -229,7 +226,42 @@ class SearchScreen(Screen):
             if idx < len(results) - 1:
                 separator = MDBoxLayout(size_hint_y=None, height="6dp")
                 self.results_list.add_widget(separator)
-        threading.Thread(target=self._prefetch_articles, args=(results,), daemon=True).start()
+
+    def _append_results(self, results: List[Dict[str, str]], _dt: float = 0) -> None:
+        """Append extra results (e.g. synonyms) without clearing existing ones."""
+        if not results:
+            return
+
+        # De-duplicate by link (avoid UI spam)
+        existing = set(self.article_payloads.keys())
+        added = 0
+        for payload in results:
+            link = payload.get("link", "")
+            if link and link in existing:
+                continue
+            if link:
+                existing.add(link)
+
+            card_container = MDBoxLayout(
+                orientation="vertical",
+                size_hint_y=None,
+                adaptive_height=True,
+                padding="4dp",
+                spacing="4dp",
+            )
+            card = ResultCard(payload, on_read=self.app.show_article)
+            card_container.add_widget(card)
+            self.results_list.add_widget(card_container)
+
+            if link:
+                self.article_payloads[link] = payload
+                cached_text = payload.get("full_text") or payload.get("description") or ""
+                if cached_text:
+                    self.article_cache[link] = cached_text
+            added += 1
+
+        if added:
+            self.status_label.text = f"Найдено {len(self.article_payloads)} результата."
 
     def _prefetch_articles(self, results: List[Dict[str, str]]) -> None:
         for payload in results:
@@ -811,10 +843,11 @@ class NewsSearchApp(MDApp):
 
     def _fetch_and_display(self, link: str) -> None:
         try:
-            from news_search_core import fetch_article_text  # lazy import
+            from news_search_core import fetch_article  # lazy import
 
-            # fetch_article_text returns plain text (str)
-            text = fetch_article_text(link) or ""
+            res = fetch_article(link) or {}
+            text = (res.get("full_text") or "").strip()
+            fetched_image = (res.get("image") or "").strip()
         except Exception as exc:
             err_msg = str(exc)
             Clock.schedule_once(lambda *_: toast(f"Ошибка: {err_msg}"), 0)
@@ -822,9 +855,11 @@ class NewsSearchApp(MDApp):
 
         payload = self.search_screen.article_payloads.get(link, {})
         text = text or payload.get("full_text") or payload.get("description") or "Текст не извлечён."
-        image_url = payload.get("image", "")
+        image_url = (payload.get("image", "") or "").strip() or fetched_image
         # Обновляем full_text в payload для факт-чекинга
         payload["full_text"] = text
+        if image_url:
+            payload["image"] = image_url
         self.search_screen.article_cache[link] = text
         Clock.schedule_once(lambda *_: self.article_screen.set_article_text(text, image_url=image_url), 0)
 
