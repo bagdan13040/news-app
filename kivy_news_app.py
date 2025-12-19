@@ -887,14 +887,28 @@ class NewsSearchApp(MDApp):
             return
 
         payload = self.search_screen.article_payloads.get(link, {})
-        text = text or payload.get("full_text") or payload.get("description") or "Текст не извлечён."
+        
+        # Logic to determine what text to show
+        final_text = ""
+        if text:
+            final_text = text
+        else:
+            # Fallback to description if full text failed
+            desc = payload.get("full_text") or payload.get("description")
+            if desc:
+                final_text = desc + "\n\n[⚠️ Не удалось загрузить полный текст. Показано краткое содержание.]"
+            else:
+                final_text = "Текст не извлечён."
+
         image_url = (payload.get("image", "") or "").strip() or fetched_image
+        
         # Обновляем full_text в payload для факт-чекинга
-        payload["full_text"] = text
+        payload["full_text"] = final_text
         if image_url:
             payload["image"] = image_url
-        self.search_screen.article_cache[link] = text
-        Clock.schedule_once(lambda *_: self.article_screen.set_article_text(text, image_url=image_url), 0)
+            
+        self.search_screen.article_cache[link] = final_text
+        Clock.schedule_once(lambda *_: self.article_screen.set_article_text(final_text, image_url=image_url), 0)
 
     def go_back(self) -> None:
         self.screen_manager.current = "search"
