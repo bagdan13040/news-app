@@ -31,7 +31,7 @@ from kivymd.uix.navigationdrawer import MDNavigationLayout, MDNavigationDrawer
 from kivymd.toast import toast
 from kivymd.uix.dialog import MDDialog
 
-from news_search_core import get_news_with_content
+from news_search_core import get_news_with_content, fetch_article_text, fetch_article_content
 from backend import get_weather, get_financial_data, get_google_trends
 from llm_integration import llm_client
 
@@ -156,13 +156,39 @@ class SearchScreen(Screen):
         try:
             # Получаем основные результаты
             print(f"[SEARCH] Searching for: {query}")
-            # IMPORTANT: keep search fast on mobile; full text is fetched on demand.
-            # Increased limit as requested
-            results = get_news_with_content(query, max_results=20)
+            # Запрашиваем без контента для скорости
+            results = get_news_with_content(query, max_results=6, fetch_content=False)
             print(f"[SEARCH] Found {len(results)} initial results")
-
-            # Show initial results ASAP.
-            Clock.schedule_once(partial(self._populate_results, results, query), 0)
+            
+            # Подбираем синонимы и ищем по ним тоже
+            try:
+                print(f"[SYNONYMS] Generating synonyms for: {query}")
+                synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=2.0)
+                print(f"[SYNONYMS] Got synonyms: {synonyms}")
+                
+                for synonym in synonyms:
+                    if synonym.lower() != query.lower():
+                        print(f"[SYNONYMS] Searching for synonym: {synonym}")
+                        syn_results = get_news_with_content(synonym, max_results=2, fetch_content=False)
+                        print(f"[SYNONYMS] Found {len(syn_results)} results for '{synonym}'")
+                        results.extend(syn_results)
+            except Exception as e:
+                print(f"[SYNONYMS] Error: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # Удаляем дубликаты по ссылке
+            seen_links = set()
+            unique_results = []
+            for r in results:
+                link = r.get("link", "")
+                if link and link not in seen_links:
+                    seen_links.add(link)
+                    unique_results.append(r)
+                elif not link:
+                    unique_results.append(r)
+            results = unique_results[:10]  # Ограничиваем до 10 результатов
+            print(f"[SEARCH] Total unique results: {len(results)}")
             
         except Exception as exc:
             print(f"[SEARCH] Error: {exc}")
@@ -170,28 +196,7 @@ class SearchScreen(Screen):
             traceback.print_exc()
             Clock.schedule_once(partial(self._set_status, f"Ошибка поиска: {exc}"), 0)
             return
-
-        # Background enrichment: synonyms-based extra results (non-blocking UI).
-        try:
-            print(f"[SYNONYMS] Generating synonyms for: {query}")
-            synonyms = llm_client.generate_related_keywords(query, max_keywords=3, timeout=1.5)
-            synonyms = [s for s in synonyms if s and s.lower() != query.lower()]
-            if not synonyms:
-                return
-            print(f"[SYNONYMS] Got synonyms: {synonyms}")
-
-            extra: List[Dict[str, str]] = []
-            for synonym in synonyms:
-                print(f"[SYNONYMS] Searching for synonym: {synonym}")
-                syn_results = get_news_with_content(synonym, max_results=2)
-                extra.extend(syn_results)
-
-            if extra:
-                Clock.schedule_once(partial(self._append_results, extra), 0)
-        except Exception as e:
-            print(f"[SYNONYMS] Error: {e}")
-            import traceback
-            traceback.print_exc()
+        Clock.schedule_once(partial(self._populate_results, results, query), 0)
 
     def _set_status(self, text: str, _: float) -> None:
         self.status_label.text = text
@@ -200,8 +205,6 @@ class SearchScreen(Screen):
         if not results:
             self.status_label.text = f"По запросу \"{query}\" ничего не найдено."
             return
-        # reset list (new search)
-        self.results_list.clear_widgets()
         self.status_label.text = f"Найдено {len(results)} результата."
         for idx, payload in enumerate(results):
             # Контейнер для каждой карточки
@@ -227,49 +230,33 @@ class SearchScreen(Screen):
             if idx < len(results) - 1:
                 separator = MDBoxLayout(size_hint_y=None, height="6dp")
                 self.results_list.add_widget(separator)
-
-    def _append_results(self, results: List[Dict[str, str]], _dt: float = 0) -> None:
-        """Append extra results (e.g. synonyms) without clearing existing ones."""
-        if not results:
-            return
-
-        # De-duplicate by link (avoid UI spam)
-        existing = set(self.article_payloads.keys())
-        added = 0
-        for payload in results:
-            link = payload.get("link", "")
-            if link and link in existing:
-                continue
-            if link:
-                existing.add(link)
-
-            card_container = MDBoxLayout(
-                orientation="vertical",
-                size_hint_y=None,
-                adaptive_height=True,
-                padding="4dp",
-                spacing="4dp",
-            )
-            card = ResultCard(payload, on_read=self.app.show_article)
-            card_container.add_widget(card)
-            self.results_list.add_widget(card_container)
-
-            if link:
-                self.article_payloads[link] = payload
-                cached_text = payload.get("full_text") or payload.get("description") or ""
-                if cached_text:
-                    self.article_cache[link] = cached_text
-            added += 1
-
-        if added:
-            self.status_label.text = f"Найдено {len(self.article_payloads)} результата."
+        threading.Thread(target=self._prefetch_articles, args=(results,), daemon=True).start()
 
     def _prefetch_articles(self, results: List[Dict[str, str]]) -> None:
         for payload in results:
             link = payload.get("link", "")
+            title = payload.get("title", "")
+            if not link:
+                continue
+
             full_text = payload.get("full_text", "")
-            if link and full_text:
+            if full_text:
                 self.article_cache[link] = full_text
+            else:
+                try:
+                    # Дозагружаем контент, если его не было
+                    content = fetch_article_content(link, title=title)
+                    fetched_text = content.get("full_text")
+                    fetched_image = content.get("image")
+
+                    if fetched_text:
+                        self.article_cache[link] = fetched_text
+                        payload["full_text"] = fetched_text
+                    
+                    if fetched_image and not payload.get("image"):
+                        payload["image"] = fetched_image
+                except Exception as e:
+                    print(f"Error prefetching {link}: {e}")
 
 
 class HomeScreen(Screen):
@@ -625,11 +612,21 @@ class ArticleScreen(Screen):
         back_button = MDIconButton(icon="arrow-left", icon_size="28sp")
         back_button.bind(on_release=lambda *_: self.app.go_back())
         title = MDLabel(text="Полный текст", theme_text_color="Primary", font_style="H6")
+        
+        # Кнопки действий
+        actions_box = MDBoxLayout(orientation="horizontal", size_hint_x=None, width="96dp", spacing="4dp")
+        
+        browser_button = MDIconButton(icon="web", icon_size="24sp")
+        browser_button.bind(on_release=self.open_in_browser)
+        actions_box.add_widget(browser_button)
+        
         fact_check_button = MDIconButton(icon="shield-check", icon_size="24sp")
         fact_check_button.bind(on_release=self.show_fact_check)
+        actions_box.add_widget(fact_check_button)
+        
         top_bar.add_widget(back_button)
         top_bar.add_widget(title)
-        top_bar.add_widget(fact_check_button)
+        top_bar.add_widget(actions_box)
 
         self.image = AsyncImage(
             source="",
@@ -646,14 +643,6 @@ class ArticleScreen(Screen):
             halign="left",
             size_hint_y=None,
         )
-        # CRITICAL: Bind texture_size to height for dynamic resizing
-        self.text_label.bind(
-            texture_size=lambda instance, value: setattr(instance, "height", value[1])
-        )
-        # CRITICAL: Bind width to text_size for proper text wrapping
-        self.text_label.bind(
-            width=lambda instance, value: setattr(instance, "text_size", (value, None))
-        )
         self.scroll.add_widget(self.text_label)
 
         layout.add_widget(top_bar)
@@ -662,18 +651,16 @@ class ArticleScreen(Screen):
         self.add_widget(layout)
 
     def set_article_text(self, text: str, image_url: str = "", _: float = 0) -> None:
-        # Format text with proper paragraph breaks
         formatted_text = "\n\n".join(text.split("\n\n"))
-        
-        # CRITICAL: Set text_size BEFORE setting text to ensure proper wrapping
-        self.text_label.text_size = (self.text_label.width, None)
         self.text_label.text = formatted_text
         self.text_label.font_size = "16sp"
         self.text_label.line_height = 1.5
-        
-        # Force immediate height recalculation based on texture
-        self.text_label.texture_update()
-        self.text_label.height = self.text_label.texture_size[1]
+        self.text_label.bind(
+            texture_size=lambda instance, value: setattr(instance, "height", value[1])
+        )
+        self.text_label.bind(
+            width=lambda instance, value: setattr(instance, "text_size", (value, None))
+        )
 
         if image_url:
             self.image.source = image_url
@@ -692,6 +679,15 @@ class ArticleScreen(Screen):
                 pass
 
         Clock.schedule_once(_scroll_to_top, 0)
+
+    def open_in_browser(self, *args):
+        """Открыть статью в браузере."""
+        if not self.current_article:
+            return
+        link = self.current_article.get("link", "")
+        if link:
+            import webbrowser
+            webbrowser.open(link)
 
     def show_fact_check(self, *args):
         """Показать результат проверки фактов."""
@@ -823,23 +819,6 @@ class NewsSearchApp(MDApp):
 
         return nav_layout
 
-    def on_start(self):
-        """Called when the application starts."""
-        # Check for trafilatura availability
-        try:
-            from news_search_core import TRAFILATURA_AVAILABLE
-            status = "включен" if TRAFILATURA_AVAILABLE else "ОТКЛЮЧЕН (нет модуля)"
-        except ImportError:
-            status = "неизвестно"
-            
-        ver = "v1.2.0 (Trafilatura)"
-        toast(f"News App {ver}\nПарсер: {status}")
-        print(f"App started. Version: {ver}, Trafilatura: {status}")
-        
-        # Initialize home screen data
-        if hasattr(self.home_screen, '_fetch_and_build'):
-             self.home_screen._fetch_and_build()
-
     def _go_to(self, screen_name: str) -> None:
         try:
             self.drawer.set_state("close")
@@ -851,65 +830,49 @@ class NewsSearchApp(MDApp):
         if not link:
             toast("Ссылка недоступна.")
             return
-        
         payload = self.search_screen.article_payloads.get(link, {})
-        
-        # Check ONLY full-text cache (not snippet/description)
-        cached_full_text = self.search_screen.article_cache.get(link)
-        
+        text = (
+            self.search_screen.article_cache.get(link)
+            or payload.get("full_text")
+            or payload.get("description")
+        )
+        image_url = payload.get("image", "")
+
         self.screen_manager.current = "article"
         # Сохраняем статью для факт-чекинга
         self.article_screen.current_article = payload
-        
-        if cached_full_text:
-            # Use cached full text
-            image_url = payload.get("image", "")
-            self.article_screen.set_article_text(cached_full_text, image_url=image_url)
+        if text:
+            self.search_screen.article_cache[link] = text
+            self.article_screen.set_article_text(text, image_url=image_url)
         else:
-            # Always fetch and parse full article on first open
-            self.article_screen.text_label.text = "Загружаю полную статью..."
-            image_url = payload.get("image", "")
-            if image_url:
-                self.article_screen.image.source = image_url
-                self.article_screen.image.height = "220dp"
-                self.article_screen.image.opacity = 1
+            self.article_screen.text_label.text = "Загружаю статью..."
             threading.Thread(target=self._fetch_and_display, args=(link,), daemon=True).start()
 
     def _fetch_and_display(self, link: str) -> None:
         try:
-            from news_search_core import fetch_article  # lazy import
-
-            res = fetch_article(link) or {}
-            text = (res.get("full_text") or "").strip()
-            fetched_image = (res.get("image") or "").strip()
+            payload = self.search_screen.article_payloads.get(link, {})
+            title = payload.get("title", "")
+            content = fetch_article_content(link, title=title)
+            text = content.get("full_text") or ""
+            image = content.get("image")
         except Exception as exc:
             err_msg = str(exc)
             Clock.schedule_once(lambda *_: toast(f"Ошибка: {err_msg}"), 0)
             return
 
         payload = self.search_screen.article_payloads.get(link, {})
+        text = text or payload.get("full_text") or payload.get("description") or "Текст не извлечён."
         
-        # Logic to determine what text to show
-        final_text = ""
-        if text:
-            final_text = text
-        else:
-            # Fallback to description if full text failed
-            desc = payload.get("full_text") or payload.get("description")
-            if desc:
-                final_text = desc + "\n\n[⚠️ Не удалось загрузить полный текст. Показано краткое содержание.]"
-            else:
-                final_text = "Текст не извлечён."
-
-        image_url = (payload.get("image", "") or "").strip() or fetched_image
+        # Если картинка пришла новая, используем её, иначе старую
+        image_url = image or payload.get("image", "")
         
-        # Обновляем full_text в payload для факт-чекинга
-        payload["full_text"] = final_text
-        if image_url:
-            payload["image"] = image_url
+        # Обновляем full_text и image в payload
+        payload["full_text"] = text
+        if image:
+            payload["image"] = image
             
-        self.search_screen.article_cache[link] = final_text
-        Clock.schedule_once(lambda *_: self.article_screen.set_article_text(final_text, image_url=image_url), 0)
+        self.search_screen.article_cache[link] = text
+        Clock.schedule_once(lambda *_: self.article_screen.set_article_text(text, image_url=image_url), 0)
 
     def go_back(self) -> None:
         self.screen_manager.current = "search"

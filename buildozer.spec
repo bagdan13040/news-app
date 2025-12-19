@@ -30,9 +30,7 @@ version = 1.0.0
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
 # Keep this list pure-Python for reliable Android builds.
-# Added libxml2, libxslt for lxml support.
-# Pinned duckduckgo-search to 3.9.9 to avoid curl-cffi binary dependency issues on Android.
-requirements = python3,kivy==2.2.0,kivymd==1.2.0,requests,certifi,charset-normalizer,idna,urllib3,beautifulsoup4,python-dotenv,duckduckgo-search==3.9.9,libxml2,libxslt,lxml,httpx,h11,httpcore,anyio,sniffio,trafilatura
+requirements = python3,kivy==2.2.0,kivymd==1.2.0,requests,certifi,charset-normalizer,idna,urllib3,beautifulsoup4,python-dotenv,openai
 
 # (str) Custom source folders for requirements
 # Sets custom source for any requirements with recipes
