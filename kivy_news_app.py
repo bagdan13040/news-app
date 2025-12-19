@@ -823,22 +823,28 @@ class NewsSearchApp(MDApp):
         if not link:
             toast("Ссылка недоступна.")
             return
+        
         payload = self.search_screen.article_payloads.get(link, {})
-        text = (
-            self.search_screen.article_cache.get(link)
-            or payload.get("full_text")
-            or payload.get("description")
-        )
-        image_url = payload.get("image", "")
-
+        
+        # Check ONLY full-text cache (not snippet/description)
+        cached_full_text = self.search_screen.article_cache.get(link)
+        
         self.screen_manager.current = "article"
         # Сохраняем статью для факт-чекинга
         self.article_screen.current_article = payload
-        if text:
-            self.search_screen.article_cache[link] = text
-            self.article_screen.set_article_text(text, image_url=image_url)
+        
+        if cached_full_text:
+            # Use cached full text
+            image_url = payload.get("image", "")
+            self.article_screen.set_article_text(cached_full_text, image_url=image_url)
         else:
-            self.article_screen.text_label.text = "Загружаю статью..."
+            # Always fetch and parse full article on first open
+            self.article_screen.text_label.text = "Загружаю полную статью..."
+            image_url = payload.get("image", "")
+            if image_url:
+                self.article_screen.image.source = image_url
+                self.article_screen.image.height = "220dp"
+                self.article_screen.image.opacity = 1
             threading.Thread(target=self._fetch_and_display, args=(link,), daemon=True).start()
 
     def _fetch_and_display(self, link: str) -> None:
