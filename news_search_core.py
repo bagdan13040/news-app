@@ -31,6 +31,20 @@ executor = ThreadPoolExecutor(max_workers=DEFAULT_WORKERS)
 
 # Reusable requests Session with connection-pooling and retries
 session = requests.Session()
+
+# На Android используем certifi для SSL сертификатов
+try:
+    import certifi
+    import ssl
+    # Проверяем есть ли certifi сертификаты
+    if os.path.exists(certifi.where()):
+        session.verify = certifi.where()
+        print(f"[SSL] Using certifi bundle: {certifi.where()}")
+except ImportError:
+    print("[SSL] certifi not available, using system certificates")
+except Exception as e:
+    print(f"[SSL] Error configuring SSL: {e}")
+
 session.headers.update(
     {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -241,9 +255,16 @@ def _google_news_rss_search(query: str, max_results: int = 20) -> List[Dict[str,
         + "&hl=ru&gl=RU&ceid=RU:ru"
     )
 
-    resp = session.get(rss_url, timeout=(5, 20))
-    if not resp.ok:
-        return []
+    print(f"[RSS] Fetching Google News RSS: {rss_url}")
+    try:
+        resp = session.get(rss_url, timeout=(10, 30))
+        print(f"[RSS] Response status: {resp.status_code}")
+        if not resp.ok:
+            print(f"[RSS] Bad response: {resp.status_code}")
+            return []
+    except Exception as e:
+        print(f"[RSS] Request failed: {type(e).__name__}: {e}")
+        raise
 
     # Google RSS is XML; ElementTree is sufficient.
     try:

@@ -196,8 +196,17 @@ class SearchScreen(Screen):
 
     def _perform_search(self, query: str) -> None:
         try:
+            # Проверяем сетевое подключение на Android
+            if platform == "android":
+                try:
+                    from android.permissions import request_permissions, Permission
+                    request_permissions([Permission.INTERNET, Permission.ACCESS_NETWORK_STATE])
+                except Exception as e:
+                    print(f"[PERMISSIONS] Could not request permissions: {e}")
+            
             # Получаем основные результаты С КОНТЕНТОМ
             print(f"[SEARCH] Searching for: {query}")
+            Clock.schedule_once(partial(self._set_status, f"Ищу новости по запросу: {query}"), 0)
             results = get_news_with_content(query, max_results=15, fetch_content=True)
             print(f"[SEARCH] Found {len(results)} initial results")
             
@@ -243,10 +252,24 @@ class SearchScreen(Screen):
             print(f"[SEARCH] Total results with full text: {len(results)}")
             
         except Exception as exc:
-            print(f"[SEARCH] Error: {exc}")
+            error_type = type(exc).__name__
+            error_msg = str(exc)
+            print(f"[SEARCH] Error ({error_type}): {error_msg}")
             import traceback
             traceback.print_exc()
-            Clock.schedule_once(partial(self._set_status, f"Ошибка поиска: {exc}"), 0)
+            
+            # Формируем понятное сообщение об ошибке
+            if "ConnectionError" in error_type or "Timeout" in error_type:
+                user_msg = "Нет интернет-соединения. Проверьте подключение к сети."
+            elif "SSLError" in error_type or "Certificate" in error_msg:
+                user_msg = "Ошибка SSL-сертификата. Попробуйте переподключиться к Wi-Fi."
+            elif "Permission" in error_msg:
+                user_msg = "Нет разрешения на использование интернета. Проверьте настройки приложения."
+            else:
+                user_msg = f"Ошибка поиска: {error_type}\n{error_msg[:100]}"
+            
+            Clock.schedule_once(partial(self._set_status, user_msg), 0)
+            Clock.schedule_once(lambda *_: toast(user_msg), 0)
             return
         Clock.schedule_once(partial(self._populate_results, results, query), 0)
 
