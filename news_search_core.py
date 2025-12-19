@@ -231,20 +231,26 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
 
         # CRITICAL: Use trafilatura for high-quality full text extraction (like mobile_pack)
         text = None
+        extraction_method = "None"
+        
         if TRAFILATURA_AVAILABLE:
             try:
                 text = trafilatura.extract(html, target_language='ru')
+                if text:
+                    extraction_method = "Trafilatura"
             except Exception as e:
                 print(f"Trafilatura extraction failed: {e}")
         
-        # Fallback to BeautifulSoup if trafilatura failed or not available
-        if text is None:
+        # Fallback to BeautifulSoup if trafilatura failed or returned empty
+        if not text:
             text = _extract_text_from_html(html)
+            if text:
+                extraction_method = "BeautifulSoup"
         
         # Если текста мало и это агрегатор — попробуем перейти на canonical/первоисточник
         if (
             _depth < 1
-            and (text is None or len((text or "").strip()) < 800)
+            and (not text or len(text.strip()) < 800)
             and "<html" in html.lower()
         ):
             try:
@@ -285,13 +291,16 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
             except Exception:
                 pass
 
-        if text is None:
+        if not text:
             formatted_text = "Не удалось извлечь текст (возможно, защита от ботов)."
         else:
             # Обработка текста для добавления разрывов между абзацами (как в mobile_pack)
             paragraphs = text.split("\n")
             clean_paragraphs = [p.strip() for p in paragraphs if p.strip()]
             formatted_text = "\n\n".join(clean_paragraphs)
+            
+            # Debug info (hidden in production usually, but useful now)
+            # formatted_text += f"\n\n[Debug: Extracted via {extraction_method}, len={len(text)}]"
             
             # Warning for very short text
             if len(formatted_text) < 300:
