@@ -292,6 +292,10 @@ def _fetch_article_text(url: str, existing_image: str = None, _depth: int = 0) -
             paragraphs = text.split("\n")
             clean_paragraphs = [p.strip() for p in paragraphs if p.strip()]
             formatted_text = "\n\n".join(clean_paragraphs)
+            
+            # Warning for very short text
+            if len(formatted_text) < 300:
+                formatted_text += "\n\n[Внимание: Текст статьи очень короткий. Возможно, это страница рубрики или видео-репортаж.]"
 
         # Попытка извлечь изображение: existing_image, быстрый regex, затем BS4 как fallback
         image_url = None

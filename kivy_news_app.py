@@ -822,6 +822,23 @@ class NewsSearchApp(MDApp):
 
         return nav_layout
 
+    def on_start(self):
+        """Called when the application starts."""
+        # Check for trafilatura availability
+        try:
+            from news_search_core import TRAFILATURA_AVAILABLE
+            status = "включен" if TRAFILATURA_AVAILABLE else "ОТКЛЮЧЕН (нет модуля)"
+        except ImportError:
+            status = "неизвестно"
+            
+        ver = "v1.2.0 (Trafilatura)"
+        toast(f"News App {ver}\nПарсер: {status}")
+        print(f"App started. Version: {ver}, Trafilatura: {status}")
+        
+        # Initialize home screen data
+        if hasattr(self.home_screen, '_fetch_and_build'):
+             self.home_screen._fetch_and_build()
+
     def _go_to(self, screen_name: str) -> None:
         try:
             self.drawer.set_state("close")
