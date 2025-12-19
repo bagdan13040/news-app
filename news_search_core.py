@@ -49,6 +49,8 @@ def _extract_text_from_html(html: str) -> str | None:
 
     This intentionally avoids lxml/trafilatura/readability to keep Android builds
     reliable (pure-Python stack only).
+    
+    Improved algorithm to extract MORE content (full articles, not just snippets).
     """
 
     if not html:
@@ -60,31 +62,75 @@ def _extract_text_from_html(html: str) -> str | None:
     soup = BeautifulSoup(html, "html.parser")
 
     # Drop obvious boilerplate/noise
-    for tag in soup.find_all(["script", "style", "noscript", "svg", "canvas"]):
+    for tag in soup.find_all(["script", "style", "noscript", "svg", "canvas", "iframe"]):
         try:
             tag.decompose()
         except Exception:
             pass
+    
+    # Remove common non-content elements
     for tag in soup.find_all(["header", "footer", "nav", "aside", "form"]):
         try:
             tag.decompose()
         except Exception:
             pass
+    
+    # Remove elements with common ad/promo classes
+    for selector in [".ad", ".advertisement", ".promo", ".related", ".sidebar", ".comments", ".share", ".social"]:
+        for tag in soup.select(selector):
+            try:
+                tag.decompose()
+            except Exception:
+                pass
 
-    node = soup.find("article") or soup.find("main") or soup.body or soup
+    # Find main content container - try multiple strategies
+    node = None
+    
+    # Strategy 1: article tag
+    node = soup.find("article")
+    
+    # Strategy 2: main tag
+    if not node:
+        node = soup.find("main")
+    
+    # Strategy 3: div with content-related classes
+    if not node:
+        for cls in ["article", "content", "post", "entry", "story", "text"]:
+            node = soup.find("div", class_=re.compile(cls, re.IGNORECASE))
+            if node:
+                break
+    
+    # Strategy 4: fallback to body
+    if not node:
+        node = soup.body or soup
 
+    # Extract ALL text content from relevant tags (not just long ones)
     chunks: list[str] = []
-    for el in node.find_all(["h1", "h2", "h3", "p", "li"], limit=400):
+    
+    # Get headers and paragraphs in order - keep structure
+    for el in node.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "blockquote", "pre", "code"]):
         t = el.get_text(" ", strip=True)
-        if t and len(t) >= 40:
+        # Lower minimum length to capture more content (was 40, now 10)
+        if t and len(t) >= 10:
             chunks.append(t)
-
+    
     if chunks:
-        return "\n\n".join(chunks)
+        # Join with double newlines for paragraph separation
+        text = "\n\n".join(chunks)
+        # Clean up excessive whitespace
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r' {2,}', ' ', text)
+        return text.strip()
 
-    # Fallback: raw text
+    # Fallback: get all text from node
     txt = node.get_text("\n", strip=True)
-    return txt or None
+    if txt:
+        # Clean up excessive whitespace in fallback too
+        txt = re.sub(r'\n{3,}', '\n\n', txt)
+        txt = re.sub(r' {2,}', ' ', txt)
+        return txt.strip()
+    
+    return None
 
 
 def _parse_date(date_str: str):
